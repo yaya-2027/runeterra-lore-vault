@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VaultGraph</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Cytoscape.js via CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+</head>
+<body>
+
+  <!-- ── Barre de contrôles ── -->
+  <header class="toolbar">
+    <span class="logo">⬡ VaultGraph</span>
+
+    <div class="toolbar-actions">
+      <!-- Sauvegarde de snapshot -->
+      <button id="btn-save" class="btn">💾 Save snapshot</button>
+
+      <!-- Chargement d'un snapshot -->
+      <select id="snapshot-select" class="select">
+        <option value="">— Charger un snapshot —</option>
+      </select>
+      <button id="btn-load" class="btn">↩ Load</button>
+      <button id="btn-live" class="btn btn-secondary" style="display:none">🔴 Live</button>
+    </div>
+
+    <!-- Indicateur de mode lecture seule -->
+    <span id="readonly-badge" class="badge" style="display:none">Lecture seule</span>
+  </header>
+
+  <!-- ── Contenu principal ── -->
+  <main class="layout">
+
+    <!-- Graphe Cytoscape -->
+    <div id="cy"></div>
+
+    <!-- Panneau latéral : Ghost Notes -->
+    <aside id="ghost-panel" class="panel">
+      <div class="panel-header">
+        <span>👻 Ghost Notes</span>
+        <button id="btn-toggle-panel" class="btn-icon" title="Réduire">◀</button>
+      </div>
+      <ul id="ghost-list" class="ghost-list">
+        <li class="empty-msg">Aucune note fantôme détectée.</li>
+      </ul>
+    </aside>
+
+  </main>
+
+  <!-- Compteurs d'infos en bas -->
+  <footer class="status-bar">
+    <span id="info-nodes">0 nœuds</span>
+    <span>·</span>
+    <span id="info-edges">0 liens</span>
+    <span>·</span>
+    <span id="info-ghosts">0 fantômes</span>
+    <span id="live-indicator" class="live-dot" title="Connexion live active"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
