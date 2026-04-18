@@ -98,86 +98,105 @@ function nodeReducer(node, data) {
   const res = { ...data, type: 'circle' };
   if (data._hidden) { res.hidden = true; return res; }
 
-  const scale  = uiSettings.nodeScale;
-  const active = state.selectedNode || state.hoveredNode;
+  const isGhost    = data.ghost === true;
+  const isTag      = data.ntype === 'tag';
+  const isHovered  = node === state.hoveredNode;
+  const isSelected = node === state.selectedNode;
+  const deg        = data.degree || 0;
 
-  res.size = data._baseSize * scale;
+  const baseSize = isGhost ? 4 : isTag ? 5 : deg > 8 ? 9 : deg > 4 ? 6 : 5;
+  res.size       = baseSize * uiSettings.nodeScale;
 
-  if (state.searchQuery) {
-    if (node.toLowerCase().includes(state.searchQuery)) {
-      res.color = COLORS.nodeSelected;
-      res.size  = data._baseSize * scale * 1.4;
-    } else {
-      res.color = COLORS.fadedNode;
-      res.label = '';
-    }
-    return res;
+  if (isTag) {
+    res.color       = 'rgba(224,64,251,0.10)';
+    res.borderColor = '#E040FB';
+    res.borderSize  = 0.7;
+  } else if (isGhost) {
+    res.color       = 'rgba(244,114,182,0.07)';
+    res.borderColor = isHovered ? 'rgba(244,114,182,0.95)' : 'rgba(244,114,182,0.45)';
+    res.borderSize  = isHovered ? 1.2 : 0.7;
+  } else {
+    const fillOp   = deg > 8 ? 0.22 : deg > 4 ? 0.15 : 0.10;
+    const strokeOp = deg > 8 ? 1.0  : deg > 4 ? 0.70 : 0.45;
+    const strokeW  = deg > 8 ? 1.4  : deg > 4 ? 1.0  : 0.7;
+    res.color       = isHovered || isSelected ? 'rgba(168,85,247,0.35)' : `rgba(168,85,247,${fillOp})`;
+    res.borderColor = isHovered || isSelected ? '#A855F7' : `rgba(168,85,247,${strokeOp})`;
+    res.borderSize  = isHovered ? 1.5 : strokeW;
   }
 
-  if (active) {
-    if (node === active) {
-      res.color  = state.selectedNode === node ? COLORS.nodeSelected : COLORS.nodeHover;
-      res.size   = data._baseSize * scale * 1.6;
-      res.zIndex = 2;
-    } else if (activeNeighbors.has(node)) {
-      res.color  = COLORS.nodeNeighbor;
-      res.size   = data._baseSize * scale * 1.1;
-      res.zIndex = 1;
-    } else {
-      res.color  = COLORS.fadedNode;
-      res.label  = '';
-      res.size   = data._baseSize * scale * 0.7;
-    }
+  if (state.searchQuery && !node.toLowerCase().includes(state.searchQuery)) {
+    res.color       = 'rgba(168,85,247,0.04)';
+    res.borderColor = 'rgba(168,85,247,0.08)';
+    res.label       = '';
   }
 
   return res;
 }
 
 function edgeReducer(edge, data) {
-  const res = { ...data };
-  const [src, tgt] = graph.extremities(edge);
-  if (graph.getNodeAttribute(src, '_hidden') || graph.getNodeAttribute(tgt, '_hidden')) {
-    res.hidden = true;
+  const res     = { ...data };
+  const src     = graph.source(edge);
+  const tgt     = graph.target(edge);
+  const srcData = graph.getNodeAttributes(src);
+  const tgtData = graph.getNodeAttributes(tgt);
+
+  if (srcData._hidden || tgtData._hidden) { res.hidden = true; return res; }
+
+  const isGhostEdge = srcData.ghost || tgtData.ghost;
+  const degSum      = (srcData.degree || 0) + (tgtData.degree || 0);
+
+  if (isGhostEdge) {
+    res.color = 'rgba(244,114,182,0.32)';
+    res.size  = 0.7 * uiSettings.edgeScale;
     return res;
   }
 
-  const es     = uiSettings.edgeScale;
-  const active = state.selectedNode || state.hoveredNode;
-  res.size = 0.6 * es;
-
-  if (active) {
-    if (graph.hasExtremity(edge, active)) {
-      res.color = COLORS.edgeActive;
-      res.size  = 1.5 * es;
-    } else {
-      res.color = COLORS.fadedEdge;
-      res.size  = 0.3 * es;
-    }
-  }
+  const t       = Math.min(1, degSum / 20);
+  const opacity = 0.18 + t * 0.32;
+  const weight  = 0.7  + t * 0.9;
+  res.color = `rgba(168,85,247,${opacity.toFixed(2)})`;
+  res.size  = weight * uiSettings.edgeScale;
 
   return res;
 }
 
 // ── Rendu personnalisé (supprime le carré noir sigma) ──
 function customDrawNodeHover(context, data, settings) {
-  const size = data.size || 5;
+  const isGhost = data.ghost === true;
+  const color   = isGhost ? '#F472B6' : '#A855F7';
+  const size    = data.size;
+  const x       = data.x;
+  const y       = data.y;
 
-  // Halo vert subtil
-  context.save();
+  // Halo extérieur
   context.beginPath();
-  context.arc(data.x, data.y, size + 5, 0, Math.PI * 2);
-  context.fillStyle = 'rgba(34,197,94,0.10)';
+  context.arc(x, y, size + 5, 0, Math.PI * 2);
+  context.fillStyle = isGhost ? 'rgba(244,114,182,0.12)' : 'rgba(168,85,247,0.15)';
   context.fill();
-  context.restore();
 
-  // Label sans rectangle de fond
+  // Contour vif
+  context.beginPath();
+  context.arc(x, y, size, 0, Math.PI * 2);
+  context.strokeStyle = color;
+  context.lineWidth = 1.5;
+  context.stroke();
+
+  // Label — fond semi-transparent, PAS de rectangle noir
   if (data.label) {
-    const fontSize = settings.labelSize || 10;
-    context.save();
-    context.font = `600 ${fontSize}px ${settings.labelFont || 'IBM Plex Sans, sans-serif'}`;
-    context.fillStyle = 'rgba(203,213,225,0.95)';
-    context.fillText(data.label, data.x + size + 4, data.y + fontSize / 3);
-    context.restore();
+    const fs   = Math.max(settings.labelSize || 12, 12);
+    context.font = `500 ${fs}px IBM Plex Sans, sans-serif`;
+    const tw   = context.measureText(data.label).width;
+    const lx   = x - tw / 2;
+    const ly   = y - size - 10;
+
+    context.fillStyle = 'rgba(9,6,15,0.82)';
+    context.beginPath();
+    context.roundRect(lx - 6, ly - fs, tw + 12, fs + 6, 3);
+    context.fill();
+
+    context.fillStyle = '#EDE8F5';
+    context.textAlign = 'center';
+    context.fillText(data.label, x, ly);
   }
 }
 

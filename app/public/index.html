@@ -6,7 +6,7 @@
   <title>Synweft</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.4/dist/graphology.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/sigma@2.4.0/build/sigma.min.js"></script>
@@ -185,7 +185,19 @@
     <span id="info-ghosts">0 fantômes</span>
     <span class="sep">·</span>
     <span id="info-tags">0 tags</span>
-    <span class="status-hint">Clic = focus · Clic fond = reset · Scroll = zoom</span>
+    <svg id="legend" width="480" height="18" viewBox="0 0 480 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-left:12px;opacity:0.75;flex-shrink:0">
+      <circle cx="8" cy="14" r="6" fill="rgba(168,85,247,0.12)" stroke="rgba(168,85,247,0.55)" stroke-width="0.8"/>
+      <text x="20" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(168,85,247,0.80)">Note</text>
+      <circle cx="88" cy="14" r="6" fill="rgba(244,114,182,0.07)" stroke="rgba(244,114,182,0.45)" stroke-width="0.8"/>
+      <text x="100" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(244,114,182,0.70)">Fantôme</text>
+      <rect x="182" y="8" width="12" height="12" rx="1.5" fill="rgba(224,64,251,0.10)" stroke="rgba(224,64,251,0.55)" stroke-width="0.8" transform="rotate(45 188 14)"/>
+      <text x="200" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(224,64,251,0.70)">Tag</text>
+      <line x1="250" y1="14" x2="280" y2="14" stroke="rgba(168,85,247,0.50)" stroke-width="1.4"/>
+      <text x="286" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(122,107,144,0.80)">Lien note</text>
+      <line x1="360" y1="14" x2="390" y2="14" stroke="rgba(244,114,182,0.35)" stroke-width="0.8"/>
+      <text x="396" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(122,107,144,0.80)">Lien fantôme</text>
+    </svg>
+    <span class="status-hint">Clic = focus · Scroll = zoom</span>
     <span id="live-indicator" class="live-dot"></span>
   </footer>
 

@@ -2,22 +2,40 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:           #0F172A;
-  --bg-panel:     #1E293B;
-  --bg-toolbar:   #0D1424;
-  --bg-elevated:  #162032;
-  --border:       #1E2D45;
-  --border-soft:  #243550;
-  --text:         #94A3B8;
-  --text-bright:  #CBD5E1;
-  --text-dim:     #3D5068;
-  --accent:       #22C55E;
-  --accent-dim:   rgba(34,197,94,0.15);
-  --accent-glow:  rgba(34,197,94,0.3);
-  --accent-2:     #6366F1;
+  /* Fonds */
+  --bg:           #09060F;
+  --bg-panel:     #0E0818;
+  --bg-toolbar:   #09060F;
+  --bg-elevated:  #130D20;
+
+  /* Bordures */
+  --border:       #1E1230;
+  --border-soft:  #2E1A48;
+
+  /* Textes */
+  --text:         #7A6B90;
+  --text-bright:  #C8BBD8;
+  --text-dim:     #3D2D55;
+
+  /* Accent principal — Violet */
+  --accent:       #A855F7;
+  --accent-dim:   rgba(168, 85, 247, 0.12);
+  --accent-glow:  rgba(168, 85, 247, 0.28);
+
+  /* Accent secondaire — Magenta (tags) */
+  --accent-2:     #E040FB;
+  --accent-2-dim: rgba(224, 64, 251, 0.10);
+
+  /* Fantômes — Rose */
+  --ghost:        #F472B6;
+  --ghost-dim:    rgba(244, 114, 182, 0.08);
+
+  /* Système */
   --red:          #EF4444;
   --font:         'IBM Plex Sans', system-ui, sans-serif;
-  --font-mono:    'JetBrains Mono', monospace;
+  --font-mono:    'IBM Plex Mono', monospace;
+
+  /* Layout */
   --toolbar-h:    44px;
   --filter-h:     36px;
   --status-h:     26px;
@@ -40,8 +58,10 @@ html, body {
   align-items: center;
   gap: 8px;
   padding: 0 14px;
-  background: var(--bg-toolbar);
+  background: rgba(9, 6, 15, 0.95);
   border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   height: var(--toolbar-h);
   flex-shrink: 0;
 }
@@ -53,7 +73,7 @@ html, body {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-bright);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   flex-shrink: 0;
   user-select: none;
 }
@@ -88,7 +108,7 @@ html, body {
   width: 100%;
   background: var(--bg-elevated);
   color: var(--text-bright);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   padding: 5px 26px 5px 27px;
   font-size: 12px;
@@ -134,9 +154,9 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: var(--bg-elevated);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   padding: 4px 10px;
   font-size: 11.5px;
@@ -147,31 +167,31 @@ html, body {
 }
 .btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 .btn:hover {
-  background: var(--bg-panel);
+  background: var(--bg-elevated);
   color: var(--text-bright);
-  border-color: var(--border-soft);
+  border-color: var(--border);
 }
 .btn:disabled { opacity: 0.3; cursor: default; }
 
 .btn-ghost {
   background: transparent;
   border-color: transparent;
-  color: var(--text-dim);
+  color: var(--text);
 }
 .btn-ghost:hover {
-  background: var(--bg-elevated);
-  color: var(--text);
-  border-color: var(--border);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .btn-warning {
-  background: rgba(34,197,94,0.08);
-  border-color: rgba(34,197,94,0.2);
+  background: var(--accent-dim);
+  border-color: rgba(168,85,247,0.2);
   color: var(--accent);
 }
 .btn-warning:hover {
-  background: rgba(34,197,94,0.15);
-  border-color: rgba(34,197,94,0.35);
+  background: rgba(168,85,247,0.18);
+  border-color: rgba(168,85,247,0.4);
 }
 
 .btn-icon {
@@ -246,7 +266,7 @@ html, body {
   gap: 6px;
   padding: 0 14px;
   height: var(--filter-h);
-  background: var(--bg-toolbar);
+  background: rgba(9, 6, 15, 0.90);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -266,22 +286,22 @@ html, body {
   align-items: center;
   gap: 5px;
   padding: 2px 9px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: 20px;
   background: transparent;
   cursor: pointer;
   user-select: none;
   transition: background var(--transition), border-color var(--transition), color var(--transition);
   font-size: 11px;
-  color: var(--text-dim);
+  color: var(--text);
 }
 .chip:has(input:checked) {
   background: var(--accent-dim);
-  border-color: rgba(34,197,94,0.3);
+  border-color: rgba(168,85,247,0.40);
   color: var(--accent);
 }
-.chip:hover { border-color: var(--border-soft); color: var(--text); }
-.chip:has(input:checked):hover { border-color: rgba(34,197,94,0.45); }
+.chip:hover:not(:has(input:checked)) { border-color: var(--text); color: var(--text-bright); }
+.chip:has(input:checked):hover { border-color: rgba(168,85,247,0.55); }
 
 .chip input[type="checkbox"] {
   appearance: none;
@@ -325,8 +345,8 @@ html, body {
   height: 100%;
   background-color: var(--bg);
   background-image:
-    radial-gradient(circle, #1E293B 1px, transparent 1px);
-  background-size: 26px 26px;
+    radial-gradient(circle, rgba(46,26,72,0.40) 1px, transparent 1px);
+  background-size: 28px 28px;
 }
 
 /* ── Side panel ── */
@@ -413,7 +433,7 @@ html, body {
 .ghost-list li {
   padding: 5px 12px;
   font-size: 11px;
-  color: var(--text-dim);
+  color: var(--ghost);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -423,8 +443,8 @@ html, body {
 }
 .ghost-list li:hover {
   background: var(--bg-elevated);
-  color: var(--text);
-  border-left-color: var(--accent);
+  color: var(--text-bright);
+  border-left-color: var(--ghost);
 }
 .ghost-list li.empty-msg {
   font-style: italic;
@@ -445,11 +465,11 @@ html, body {
   gap: 6px;
   height: var(--status-h);
   padding: 0 14px;
-  background: var(--bg-toolbar);
+  background: rgba(9, 6, 15, 0.95);
   border-top: 1px solid var(--border);
   font-size: 10.5px;
   font-family: var(--font-mono);
-  color: var(--text-dim);
+  color: var(--text);
   flex-shrink: 0;
 }
 
@@ -469,7 +489,7 @@ html, body {
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 5px var(--accent-glow);
+  box-shadow: 0 0 6px rgba(168, 85, 247, 0.60);
   animation: pulse 3s ease-in-out infinite;
   flex-shrink: 0;
 }
@@ -490,13 +510,13 @@ html, body {
   pointer-events: none;
   display: none;
   z-index: 1000;
-  background: rgba(15, 23, 42, 0.92);
+  background: rgba(9, 6, 15, 0.95);
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   padding: 8px 12px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.5), 0 0 0 1px rgba(34,197,94,0.06);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.50), 0 0 0 1px rgba(168,85,247,0.08);
   min-width: 100px;
   transform: translate(14px, -50%);
 }
@@ -535,10 +555,14 @@ html, body {
   right: 12px;
   width: 252px;
   max-height: calc(100% - 24px);
-  background: var(--bg-panel);
+  background: rgba(14, 8, 24, 0.96);
   border: 1px solid var(--border-soft);
   border-radius: 10px;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(34,197,94,0.06);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.60),
+    0 0 0 1px rgba(168, 85, 247, 0.08);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   z-index: 100;
   display: flex;
   flex-direction: column;
@@ -632,9 +656,9 @@ html, body {
 details[open] > .sp-summary .sp-chevron { transform: rotate(180deg); }
 
 .sp-badge {
-  background: rgba(100,116,139,0.1);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid rgba(168,85,247,0.20);
   border-radius: 10px;
   padding: 1px 7px;
   font-size: 10px;
@@ -655,8 +679,8 @@ details[open] > .sp-summary .sp-chevron { transform: rotate(180deg); }
 .sp-btn-animate {
   width: 100%;
   background: var(--bg-elevated);
-  color: var(--text);
-  border: 1px solid var(--border);
+  color: var(--text-bright);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius);
   padding: 6px 0;
   font-size: 11px;
@@ -665,13 +689,9 @@ details[open] > .sp-summary .sp-chevron { transform: rotate(180deg); }
   transition: background var(--transition), border-color var(--transition), color var(--transition);
   text-align: center;
 }
-.sp-btn-animate:hover {
-  background: var(--accent-dim);
-  border-color: rgba(34,197,94,0.35);
-  color: var(--accent);
-}
+.sp-btn-animate:hover,
 .sp-btn-animate.active {
   background: var(--accent-dim);
-  border-color: rgba(34,197,94,0.4);
+  border-color: rgba(168,85,247,0.40);
   color: var(--accent);
 }
