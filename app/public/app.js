@@ -14,8 +14,25 @@ const infoEdges        = document.getElementById('info-edges');
 const infoGhosts       = document.getElementById('info-ghosts');
 const infoTags         = document.getElementById('info-tags');
 const liveIndicator    = document.getElementById('live-indicator');
-const btnToggle        = document.getElementById('btn-toggle-panel');
-const panel            = document.getElementById('side-panel');
+const btnSettings      = document.getElementById('btn-settings');
+const settingsPanel    = document.getElementById('settings-panel');
+const btnSpClose       = document.getElementById('btn-sp-close');
+const btnAnimate       = document.getElementById('btn-animate');
+const ghostCountBadge  = document.getElementById('ghost-count-badge');
+const spLabelThr       = document.getElementById('sp-label-thr');
+const spNodeScale      = document.getElementById('sp-node-scale');
+const spEdgeScale      = document.getElementById('sp-edge-scale');
+const spGravity        = document.getElementById('sp-gravity');
+const spRepulsion      = document.getElementById('sp-repulsion');
+const spAttraction     = document.getElementById('sp-attraction');
+const spMinDist        = document.getElementById('sp-min-dist');
+const valLabelThr      = document.getElementById('val-label-thr');
+const valNodeScale     = document.getElementById('val-node-scale');
+const valEdgeScale     = document.getElementById('val-edge-scale');
+const valGravity       = document.getElementById('val-gravity');
+const valRepulsion     = document.getElementById('val-repulsion');
+const valAttraction    = document.getElementById('val-attraction');
+const valMinDist       = document.getElementById('val-min-dist');
 const searchInput      = document.getElementById('search-input');
 const searchClear      = document.getElementById('search-clear');
 const filterGhosts     = document.getElementById('filter-ghosts');
@@ -41,10 +58,23 @@ const COLORS = {
   fadedEdge:    'rgba(100,116,139,0.03)',
 };
 
+// ── Paramètres UI ─────────────────────────────
+const uiSettings = {
+  labelThreshold: 5,
+  nodeScale:      1.0,
+  edgeScale:      1.0,
+  gravity:        0,
+  repulsion:      4000,
+  attraction:     0.008,
+  minDist:        15,
+};
+
 // ── État ──────────────────────────────────────
 let graph      = null;
 let renderer   = null;
 let isReadOnly = false;
+let animateId  = null;
+let animState  = null;
 
 const state = {
   hoveredNode:  null,
@@ -65,15 +95,18 @@ function refreshNeighbors() {
 
 // ── Reducers (appelés chaque frame par sigma) ──
 function nodeReducer(node, data) {
-  const res = { ...data, type: 'circle' }; // force sigma circle program
+  const res = { ...data, type: 'circle' };
   if (data._hidden) { res.hidden = true; return res; }
 
+  const scale  = uiSettings.nodeScale;
   const active = state.selectedNode || state.hoveredNode;
+
+  res.size = data._baseSize * scale;
 
   if (state.searchQuery) {
     if (node.toLowerCase().includes(state.searchQuery)) {
       res.color = COLORS.nodeSelected;
-      res.size  = data._baseSize * 1.4;
+      res.size  = data._baseSize * scale * 1.4;
     } else {
       res.color = COLORS.fadedNode;
       res.label = '';
@@ -83,17 +116,17 @@ function nodeReducer(node, data) {
 
   if (active) {
     if (node === active) {
-      res.color = state.selectedNode === node ? COLORS.nodeSelected : COLORS.nodeHover;
-      res.size  = data._baseSize * 1.6;
+      res.color  = state.selectedNode === node ? COLORS.nodeSelected : COLORS.nodeHover;
+      res.size   = data._baseSize * scale * 1.6;
       res.zIndex = 2;
     } else if (activeNeighbors.has(node)) {
-      res.color = COLORS.nodeNeighbor;
-      res.size  = data._baseSize * 1.1;
+      res.color  = COLORS.nodeNeighbor;
+      res.size   = data._baseSize * scale * 1.1;
       res.zIndex = 1;
     } else {
-      res.color = COLORS.fadedNode;
-      res.label = '';
-      res.size  = data._baseSize * 0.7;
+      res.color  = COLORS.fadedNode;
+      res.label  = '';
+      res.size   = data._baseSize * scale * 0.7;
     }
   }
 
@@ -108,22 +141,123 @@ function edgeReducer(edge, data) {
     return res;
   }
 
+  const es     = uiSettings.edgeScale;
   const active = state.selectedNode || state.hoveredNode;
+  res.size = 0.6 * es;
+
   if (active) {
     if (graph.hasExtremity(edge, active)) {
       res.color = COLORS.edgeActive;
-      res.size  = 1.5;
+      res.size  = 1.5 * es;
     } else {
       res.color = COLORS.fadedEdge;
-      res.size  = 0.3;
+      res.size  = 0.3 * es;
     }
   }
 
   return res;
 }
 
+// ── Rendu personnalisé (supprime le carré noir sigma) ──
+function customDrawNodeHover(context, data, settings) {
+  const size = data.size || 5;
+
+  // Halo vert subtil
+  context.save();
+  context.beginPath();
+  context.arc(data.x, data.y, size + 5, 0, Math.PI * 2);
+  context.fillStyle = 'rgba(34,197,94,0.10)';
+  context.fill();
+  context.restore();
+
+  // Label sans rectangle de fond
+  if (data.label) {
+    const fontSize = settings.labelSize || 10;
+    context.save();
+    context.font = `600 ${fontSize}px ${settings.labelFont || 'IBM Plex Sans, sans-serif'}`;
+    context.fillStyle = 'rgba(203,213,225,0.95)';
+    context.fillText(data.label, data.x + size + 4, data.y + fontSize / 3);
+    context.restore();
+  }
+}
+
+// ── Spring animation (per-frame) ──────────────
+function startAnimation() {
+  if (animateId || !graph) return;
+  btnAnimate.textContent = 'Stop';
+  btnAnimate.classList.add('active');
+
+  const nodes = graph.nodes();
+  const n = nodes.length;
+  const nodeIndex = {};
+  nodes.forEach((nd, i) => { nodeIndex[nd] = i; });
+
+  animState = {
+    nodes, n, nodeIndex,
+    vx: new Float32Array(n),
+    vy: new Float32Array(n),
+    xs: nodes.map(nd => graph.getNodeAttribute(nd, 'x')),
+    ys: nodes.map(nd => graph.getNodeAttribute(nd, 'y')),
+  };
+
+  function frame() {
+    const { nodes, n, nodeIndex, vx, vy, xs, ys } = animState;
+    const REP  = uiSettings.repulsion;
+    const ATT  = uiSettings.attraction;
+    const GRAV = uiSettings.gravity;
+    const DAMP = 0.55;
+    const MIND = Math.max(1, uiSettings.minDist);
+    const MAXV = 30;
+
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = xs[j] - xs[i], dy = ys[j] - ys[i];
+        const dist  = Math.max(MIND, Math.sqrt(dx * dx + dy * dy));
+        const force = REP / (dist * dist);
+        const fx = force * dx / dist, fy = force * dy / dist;
+        vx[i] -= fx; vy[i] -= fy;
+        vx[j] += fx; vy[j] += fy;
+      }
+    }
+    if (GRAV > 0) {
+      for (let i = 0; i < n; i++) {
+        vx[i] -= GRAV * xs[i];
+        vy[i] -= GRAV * ys[i];
+      }
+    }
+    graph.forEachEdge((_e, _a, src, tgt) => {
+      const si = nodeIndex[src], ti = nodeIndex[tgt];
+      if (si === undefined || ti === undefined) return;
+      const dx = xs[ti] - xs[si], dy = ys[ti] - ys[si];
+      vx[si] += ATT * dx; vy[si] += ATT * dy;
+      vx[ti] -= ATT * dx; vy[ti] -= ATT * dy;
+    });
+    for (let i = 0; i < n; i++) {
+      vx[i] *= DAMP; vy[i] *= DAMP;
+      const spd = Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+      if (spd > MAXV) { vx[i] = vx[i] / spd * MAXV; vy[i] = vy[i] / spd * MAXV; }
+      xs[i] += vx[i]; ys[i] += vy[i];
+    }
+    for (let i = 0; i < n; i++) {
+      graph.setNodeAttribute(nodes[i], 'x', xs[i]);
+      graph.setNodeAttribute(nodes[i], 'y', ys[i]);
+    }
+    if (renderer) renderer.refresh();
+    animateId = requestAnimationFrame(frame);
+  }
+  animateId = requestAnimationFrame(frame);
+}
+
+function stopAnimation() {
+  if (animateId) { cancelAnimationFrame(animateId); animateId = null; }
+  animState = null;
+  btnAnimate.textContent = 'Animer';
+  btnAnimate.classList.remove('active');
+}
+
 // ── Initialisation du graphe ───────────────────
 function initGraph(graphData) {
+  stopAnimation();
   if (renderer) { renderer.kill(); renderer = null; }
 
   graph = new graphology.Graph({ multi: false, allowSelfLoops: false });
@@ -182,18 +316,19 @@ function initGraph(graphData) {
   renderer = new Sigma(graph, document.getElementById('cy'), {
     renderEdgeLabels:   false,
     allowInvalidContainer: true,
-    defaultNodeType:   'circle',
-    minCameraRatio:    0.005,
-    maxCameraRatio:    20,
+    defaultNodeType:    'circle',
+    minCameraRatio:     0.005,
+    maxCameraRatio:     20,
     nodeReducer,
     edgeReducer,
-    labelFont:         'IBM Plex Sans, system-ui, sans-serif',
-    labelSize:         10,
-    labelColor:        { color: 'rgba(148,163,184,0.65)' },
-    labelThreshold:    5,
-    edgeLabelSize:     8,
-    stagePadding:      40,
-    backgroundColor:   '#0F172A',
+    labelFont:          'IBM Plex Sans, system-ui, sans-serif',
+    labelSize:          10,
+    labelColor:         { color: 'rgba(148,163,184,0.65)' },
+    labelThreshold:     uiSettings.labelThreshold,
+    edgeLabelSize:      8,
+    stagePadding:       40,
+    backgroundColor:    '#0F172A',
+    drawNodeHover:      customDrawNodeHover,
   });
 
   bindSigmaEvents();
@@ -267,12 +402,12 @@ function circularLayout(graph) {
 // ── Spring layout stable (avec clamping des forces) ──
 function springStep(iterations) {
   if (!graph) return;
-  const nodes   = graph.nodes();
-  const n       = nodes.length;
-  const REPULSION  = 4000;
-  const ATTRACTION = 0.008;
+  const nodes      = graph.nodes();
+  const n          = nodes.length;
+  const REPULSION  = uiSettings.repulsion;
+  const ATTRACTION = uiSettings.attraction;
   const DAMPING    = 0.55;
-  const MIN_DIST   = 15;
+  const MIN_DIST   = Math.max(1, uiSettings.minDist);
   const MAX_VEL    = 30;
 
   // Index O(1) pour l'attraction (évite indexOf O(n) dans la boucle)
@@ -462,6 +597,7 @@ function updatePanelStats(graphData) {
 // ── Panel ghost notes ──────────────────────────
 function updateGhostPanel(graphData) {
   const ghosts = graphData.nodes.filter(n => n.data.ghost && n.data.type === 'note');
+  if (ghostCountBadge) ghostCountBadge.textContent = ghosts.length;
   ghostList.innerHTML = '';
 
   if (!ghosts.length) {
@@ -597,10 +733,48 @@ function connectSSE() {
 }
 
 // ── Événements UI ────────────────────────────
-btnToggle.addEventListener('click', () => {
-  panel.classList.toggle('collapsed');
-  btnToggle.title = panel.classList.contains('collapsed') ? 'Déplier' : 'Réduire';
+
+// Settings panel toggle
+btnSettings.addEventListener('click', () => settingsPanel.classList.toggle('hidden'));
+btnSpClose.addEventListener('click',  () => settingsPanel.classList.add('hidden'));
+
+// Animate button
+btnAnimate.addEventListener('click', () => {
+  if (animateId) stopAnimation();
+  else           startAnimation();
+});
+
+// Sliders settings
+spLabelThr.addEventListener('input', () => {
+  uiSettings.labelThreshold = parseFloat(spLabelThr.value);
+  valLabelThr.textContent   = spLabelThr.value;
+  if (renderer) renderer.setSetting('labelThreshold', uiSettings.labelThreshold);
+});
+spNodeScale.addEventListener('input', () => {
+  uiSettings.nodeScale     = parseFloat(spNodeScale.value);
+  valNodeScale.textContent = parseFloat(spNodeScale.value).toFixed(1);
   if (renderer) renderer.refresh();
+});
+spEdgeScale.addEventListener('input', () => {
+  uiSettings.edgeScale     = parseFloat(spEdgeScale.value);
+  valEdgeScale.textContent = parseFloat(spEdgeScale.value).toFixed(1);
+  if (renderer) renderer.refresh();
+});
+spGravity.addEventListener('input', () => {
+  uiSettings.gravity      = parseFloat(spGravity.value);
+  valGravity.textContent  = parseFloat(spGravity.value).toFixed(2);
+});
+spRepulsion.addEventListener('input', () => {
+  uiSettings.repulsion     = parseInt(spRepulsion.value, 10);
+  valRepulsion.textContent = spRepulsion.value;
+});
+spAttraction.addEventListener('input', () => {
+  uiSettings.attraction     = parseFloat(spAttraction.value);
+  valAttraction.textContent = parseFloat(spAttraction.value).toFixed(3);
+});
+spMinDist.addEventListener('input', () => {
+  uiSettings.minDist     = parseInt(spMinDist.value, 10);
+  valMinDist.textContent = spMinDist.value;
 });
 
 btnSave.addEventListener('click', saveSnapshot);
