@@ -6,8 +6,39 @@ const chokidar = require('chokidar');
 const app = express();
 const PORT = 3000;
 
-const NOTES_DIR = path.join(__dirname, 'notes');
+// ── Résolution du dossier de notes ──────────────
+// Ordre de priorité :
+// 1. synweft.config.json  (config locale, non commitée)
+// 2. ../League of Legand  (clone normal du repo)
+// 3. ../../../../League of Legand (git worktree)
+// 4. ./notes              (fallback)
+function resolveNotesDir() {
+  const configPath = path.join(__dirname, 'synweft.config.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      if (cfg.notesDir) {
+        const resolved = path.resolve(__dirname, cfg.notesDir);
+        if (fs.existsSync(resolved)) return resolved;
+      }
+    } catch {}
+  }
+
+  const candidates = [
+    path.join(__dirname, '..', 'League of Legand'),
+    path.join(__dirname, '..', '..', '..', '..', 'League of Legand'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+
+  return path.join(__dirname, 'notes');
+}
+
+const NOTES_DIR   = resolveNotesDir();
 const HISTORY_DIR = path.join(__dirname, 'history');
+
+console.log(`[config] Notes : ${NOTES_DIR}`);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -255,6 +286,27 @@ function notifyClients(eventType, filePath) {
   }
 }
 
+// Auto-snapshot : sauvegarde automatique 3s après chaque modification
+let autoSnapshotTimer = null;
+function scheduleAutoSnapshot() {
+  if (autoSnapshotTimer) clearTimeout(autoSnapshotTimer);
+  autoSnapshotTimer = setTimeout(() => {
+    try {
+      if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename  = `snapshot-${timestamp}.json`;
+      const graph     = buildGraph();
+      fs.writeFileSync(
+        path.join(HISTORY_DIR, filename),
+        JSON.stringify({ savedAt: new Date().toISOString(), graph }, null, 2)
+      );
+      console.log(`[auto-snapshot] ${filename}`);
+    } catch (err) {
+      console.error('[auto-snapshot] erreur :', err);
+    }
+  }, 3000);
+}
+
 const watcher = chokidar.watch(NOTES_DIR, {
   ignored: /(^|[\/\\])\../,
   persistent: true,
@@ -262,9 +314,9 @@ const watcher = chokidar.watch(NOTES_DIR, {
 });
 
 watcher
-  .on('add',    f => { console.log(`[watch] ajouté : ${path.basename(f)}`);    notifyClients('add', f); })
-  .on('change', f => { console.log(`[watch] modifié : ${path.basename(f)}`);   notifyClients('change', f); })
-  .on('unlink', f => { console.log(`[watch] supprimé : ${path.basename(f)}`);  notifyClients('unlink', f); });
+  .on('add',    f => { console.log(`[watch] ajouté : ${path.basename(f)}`);    notifyClients('add', f);    scheduleAutoSnapshot(); })
+  .on('change', f => { console.log(`[watch] modifié : ${path.basename(f)}`);   notifyClients('change', f); scheduleAutoSnapshot(); })
+  .on('unlink', f => { console.log(`[watch] supprimé : ${path.basename(f)}`);  notifyClients('unlink', f); scheduleAutoSnapshot(); });
 
 // ─────────────────────────────────────────────
 // Démarrage

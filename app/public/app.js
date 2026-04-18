@@ -1,426 +1,465 @@
 /* ────────────────────────────────────────────────
-   Synweft — app.js
-   Recherche · Filtres · Aperçu note · Taille nœuds · Tags
-   Design fidèle au Graph View d'Obsidian
+   Synweft — app.js  (sigma.js v2 + graphology)
    ──────────────────────────────────────────────── */
 
-// ── Références DOM ──────────────────────────────
-const btnSave         = document.getElementById('btn-save');
-const btnLoad         = document.getElementById('btn-load');
-const btnLive         = document.getElementById('btn-live');
-const snapshotSelect  = document.getElementById('snapshot-select');
-const readonlyBadge   = document.getElementById('readonly-badge');
-const ghostList       = document.getElementById('ghost-list');
-const infoNodes       = document.getElementById('info-nodes');
-const infoEdges       = document.getElementById('info-edges');
-const infoGhosts      = document.getElementById('info-ghosts');
-const infoTags        = document.getElementById('info-tags');
-const liveIndicator   = document.getElementById('live-indicator');
-const btnToggle       = document.getElementById('btn-toggle-panel');
-const panel           = document.getElementById('side-panel');
-const searchInput     = document.getElementById('search-input');
-const searchClear     = document.getElementById('search-clear');
-const filterGhosts    = document.getElementById('filter-ghosts');
-const filterTags      = document.getElementById('filter-tags');
-const filterDegree    = document.getElementById('filter-degree-range');
+// ── DOM refs ──────────────────────────────────
+const btnSave          = document.getElementById('btn-save');
+const btnLoad          = document.getElementById('btn-load');
+const btnLive          = document.getElementById('btn-live');
+const snapshotSelect   = document.getElementById('snapshot-select');
+const readonlyBadge    = document.getElementById('readonly-badge');
+const ghostList        = document.getElementById('ghost-list');
+const infoNodes        = document.getElementById('info-nodes');
+const infoEdges        = document.getElementById('info-edges');
+const infoGhosts       = document.getElementById('info-ghosts');
+const infoTags         = document.getElementById('info-tags');
+const liveIndicator    = document.getElementById('live-indicator');
+const btnToggle        = document.getElementById('btn-toggle-panel');
+const panel            = document.getElementById('side-panel');
+const searchInput      = document.getElementById('search-input');
+const searchClear      = document.getElementById('search-clear');
+const filterGhosts     = document.getElementById('filter-ghosts');
+const filterTags       = document.getElementById('filter-tags');
+const filterDegree     = document.getElementById('filter-degree-range');
 const filterDegreeVal  = document.getElementById('filter-degree-val');
 const filterDirections = document.getElementById('filter-directions');
+const tooltip          = document.getElementById('node-tooltip');
+const tooltipName      = document.getElementById('tooltip-name');
+const tooltipMeta      = document.getElementById('tooltip-meta');
 
-// ── État global ──────────────────────────────────
-let cy           = null;
-let isReadOnly   = false;
-let hasSelection = false;
-
-// ── Palette slate / green ──
+// ── Palette ───────────────────────────────────
 const COLORS = {
   nodeDefault:  '#64748B',
   nodeHover:    '#22C55E',
   nodeSelected: '#4ADE80',
   nodeNeighbor: '#86EFAC',
-  nodeGhost:    '#1E293B',
-  nodeTag:      '#6366F1',
-  edgeDefault:  'rgba(100,116,139,0.12)',
-  edgeActive:   '#22C55E',
-  glowHover:    'rgba(34,197,94,0.55)',
-  glowSelected: 'rgba(74,222,128,0.45)',
-  glowTag:      'rgba(99,102,241,0.4)',
+  nodeGhost:    '#253348',
+  nodeTag:      '#818CF8',
+  edgeDefault:  'rgba(100,116,139,0.18)',
+  edgeActive:   'rgba(34,197,94,0.7)',
+  fadedNode:    '#1A2535',
+  fadedEdge:    'rgba(100,116,139,0.03)',
 };
 
-// ────────────────────────────────────────────────
-// CALCUL DES DEGRÉS
-// ────────────────────────────────────────────────
+// ── État ──────────────────────────────────────
+let graph      = null;
+let renderer   = null;
+let isReadOnly = false;
 
-/**
- * Calcule le degré total (in + out) de chaque nœud et l'injecte dans node.data.degree.
- * Obsidian utilise le degré total pour la taille des nœuds.
- */
-function computeDegrees(graphData) {
-  const deg = {};
-  for (const edge of graphData.edges) {
-    const s = edge.data.source;
-    const t = edge.data.target;
-    deg[s] = (deg[s] || 0) + 1;
-    deg[t] = (deg[t] || 0) + 1;
-  }
-  for (const node of graphData.nodes) {
-    node.data.degree = deg[node.data.id] || 0;
+const state = {
+  hoveredNode:  null,
+  selectedNode: null,
+  searchQuery:  '',
+};
+
+// Cache des voisins pour éviter graph.neighbors() dans chaque frame
+let activeNeighbors = new Set();
+
+function refreshNeighbors() {
+  activeNeighbors.clear();
+  const active = state.selectedNode || state.hoveredNode;
+  if (active && graph && graph.hasNode(active)) {
+    graph.neighbors(active).forEach(n => activeNeighbors.add(n));
   }
 }
 
-// ────────────────────────────────────────────────
-// CYTOSCAPE — initialisation
-// ────────────────────────────────────────────────
+// ── Reducers (appelés chaque frame par sigma) ──
+function nodeReducer(node, data) {
+  const res = { ...data, type: 'circle' }; // force sigma circle program
+  if (data._hidden) { res.hidden = true; return res; }
 
-function initCytoscape(graphData) {
-  if (cy) cy.destroy();
-  hasSelection = false;
+  const active = state.selectedNode || state.hoveredNode;
 
-  computeDegrees(graphData);
+  if (state.searchQuery) {
+    if (node.toLowerCase().includes(state.searchQuery)) {
+      res.color = COLORS.nodeSelected;
+      res.size  = data._baseSize * 1.4;
+    } else {
+      res.color = COLORS.fadedNode;
+      res.label = '';
+    }
+    return res;
+  }
 
-  cy = cytoscape({
-    container: document.getElementById('cy'),
-    elements: [...graphData.nodes, ...graphData.edges],
+  if (active) {
+    if (node === active) {
+      res.color = state.selectedNode === node ? COLORS.nodeSelected : COLORS.nodeHover;
+      res.size  = data._baseSize * 1.6;
+      res.zIndex = 2;
+    } else if (activeNeighbors.has(node)) {
+      res.color = COLORS.nodeNeighbor;
+      res.size  = data._baseSize * 1.1;
+      res.zIndex = 1;
+    } else {
+      res.color = COLORS.fadedNode;
+      res.label = '';
+      res.size  = data._baseSize * 0.7;
+    }
+  }
 
-    style:  buildCytoscapeStyle(),
+  return res;
+}
 
-    // ── Cola.js : physique fluide continue ────────
-    // infinite:true → la simulation ne s'arrête jamais.
-    // Dragging un nœud → les voisins suivent en temps réel.
-    // Au relâchement → le graphe se réinstalle doucement.
-    layout: {
-      name: 'cola',
-      animate: true,
-      infinite: true,          // simulation continue = comportement "eau"
-      fit: false,              // ne pas recentrer automatiquement
-      padding: 60,
-      randomize: false,
-      avoidOverlap: true,
-      ungrabifyWhileSimulating: false, // permettre le drag pendant la simulation
-      nodeSpacing: () => 35,
-      edgeLength: 130,         // longueur naturelle des liens
-      refresh: 2,              // mise à jour toutes les 2 frames (fluide)
-      convergenceThreshold: 0.0001,
-    },
+function edgeReducer(edge, data) {
+  const res = { ...data };
+  const [src, tgt] = graph.extremities(edge);
+  if (graph.getNodeAttribute(src, '_hidden') || graph.getNodeAttribute(tgt, '_hidden')) {
+    res.hidden = true;
+    return res;
+  }
 
-    userZoomingEnabled: true,
-    userPanningEnabled: true,
-    boxSelectionEnabled: false,
-    selectionType: 'single',
+  const active = state.selectedNode || state.hoveredNode;
+  if (active) {
+    if (graph.hasExtremity(edge, active)) {
+      res.color = COLORS.edgeActive;
+      res.size  = 1.5;
+    } else {
+      res.color = COLORS.fadedEdge;
+      res.size  = 0.3;
+    }
+  }
+
+  return res;
+}
+
+// ── Initialisation du graphe ───────────────────
+function initGraph(graphData) {
+  if (renderer) { renderer.kill(); renderer = null; }
+
+  graph = new graphology.Graph({ multi: false, allowSelfLoops: false });
+
+  // Calcul des degrés
+  const deg = {};
+  for (const e of graphData.edges) {
+    deg[e.data.source] = (deg[e.data.source] || 0) + 1;
+    deg[e.data.target] = (deg[e.data.target] || 0) + 1;
+  }
+
+  // Nœuds
+  for (const n of graphData.nodes) {
+    const id     = n.data.id;
+    const degree = deg[id] || 0;
+    const isTag  = n.data.type === 'tag';
+    const isGhost = !!n.data.ghost;
+    const baseSize = isTag ? 4 : isGhost ? 3 : Math.max(4, Math.min(24, 4 + degree * 1.4));
+    const color    = isTag ? COLORS.nodeTag : isGhost ? COLORS.nodeGhost : COLORS.nodeDefault;
+
+    if (graph.hasNode(id)) continue;
+    graph.addNode(id, {
+      x:         (Math.random() - 0.5) * 200,
+      y:         (Math.random() - 0.5) * 200,
+      size:      baseSize,
+      _baseSize: baseSize,
+      label:     id,
+      color,
+      ntype:     n.data.type || 'note',
+      ghost:     isGhost,
+      degree,
+      _hidden:   false,
+    });
+  }
+
+  // Arêtes
+  for (const e of graphData.edges) {
+    const s = e.data.source, t = e.data.target;
+    if (s === t) continue; // ignore self-loops
+    if (!graph.hasNode(s) || !graph.hasNode(t)) continue;
+    if (graph.hasEdge(s, t) || graph.hasEdge(t, s)) continue;
+    graph.addEdge(s, t, {
+      color:         COLORS.edgeDefault,
+      size:          0.6,
+      bidirectional: e.data.bidirectional || false,
+    });
+  }
+
+  // Layout initial : circulaire puis spring synchrone (stable avant init sigma)
+  if (graph.order > 0) {
+    circularLayout(graph);
+    springStep(300);
+  }
+
+  // Rendu sigma.js (WebGL)
+  renderer = new Sigma(graph, document.getElementById('cy'), {
+    renderEdgeLabels:   false,
+    allowInvalidContainer: true,
+    defaultNodeType:   'circle',
+    minCameraRatio:    0.005,
+    maxCameraRatio:    20,
+    nodeReducer,
+    edgeReducer,
+    labelFont:         'IBM Plex Sans, system-ui, sans-serif',
+    labelSize:         10,
+    labelColor:        { color: 'rgba(148,163,184,0.65)' },
+    labelThreshold:    5,
+    edgeLabelSize:     8,
+    stagePadding:      40,
+    backgroundColor:   '#0F172A',
   });
 
-  bindCytoscapeEvents();
+  bindSigmaEvents();
   applyFilters();
+  fitCamera();
+
+  window._g = graph;
+  window._r = renderer;
 }
 
-/**
- * Retourne la feuille de style Cytoscape inspirée d'Obsidian.
- * Séparée pour rester lisible.
- */
-function buildCytoscapeStyle() {
-  return [
-    {
-      selector: 'node[type = "note"][!ghost]',
-      style: {
-        'background-color': COLORS.nodeDefault,
-        'border-width': 0,
-        'width':  'mapData(degree, 0, 12, 14, 46)',
-        'height': 'mapData(degree, 0, 12, 14, 46)',
-        'label': 'data(id)',
-        'color': 'rgba(148,163,184,0.5)',
-        'font-size': '9px',
-        'font-family': 'IBM Plex Sans, system-ui, sans-serif',
-        'text-valign': 'bottom',
-        'text-margin-y': 3,
-        'text-outline-width': 2,
-        'text-outline-color': '#0F172A',
-        'shadow-blur': 6,
-        'shadow-color': COLORS.nodeDefault,
-        'shadow-opacity': 0.12,
-        'shadow-offset-x': 0,
-        'shadow-offset-y': 0,
-        'transition-property': 'background-color, width, height, shadow-blur, shadow-opacity',
-        'transition-duration': '200ms',
-      }
-    },
+// ── Fit caméra sur le cluster principal ───────
+function fitCamera(animated = false) {
+  if (!renderer || !graph || graph.order === 0) return;
 
-    {
-      selector: 'node[type = "note"][?ghost]',
-      style: {
-        'background-color': '#253348',
-        'border-width': 1,
-        'border-color': '#1E293B',
-        'opacity': 0.4,
-        'width': 8,
-        'height': 8,
-        'label': 'data(id)',
-        'color': 'rgba(100,116,139,0.45)',
-        'font-size': '8px',
-        'text-valign': 'bottom',
-        'text-margin-y': 2,
-        'text-outline-width': 1,
-        'text-outline-color': '#0F172A',
-      }
-    },
+  // Bounding box des notes connectées uniquement (exclut les isolés et les tags/fantômes
+  // qui dérivent loin sous l'effet de la répulsion)
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
+  graph.forEachNode((node, attrs) => {
+    if (attrs.ntype === 'note' && !attrs.ghost && attrs.degree > 0) {
+      if (attrs.x < xMin) xMin = attrs.x;
+      if (attrs.x > xMax) xMax = attrs.x;
+      if (attrs.y < yMin) yMin = attrs.y;
+      if (attrs.y > yMax) yMax = attrs.y;
+    }
+  });
+  if (xMin === Infinity) { xMin = -100; xMax = 100; yMin = -100; yMax = 100; }
 
-    {
-      selector: 'node[type = "tag"]',
-      style: {
-        'background-color': COLORS.nodeTag,
-        'shape': 'ellipse',
-        'width': 9,
-        'height': 9,
-        'label': 'data(id)',
-        'color': 'rgba(99,102,241,0.55)',
-        'font-size': '8px',
-        'text-valign': 'bottom',
-        'text-margin-y': 2,
-        'text-outline-width': 1,
-        'text-outline-color': '#0F172A',
-        'opacity': 0.75,
-      }
-    },
+  const cx = (xMin + xMax) / 2;
+  const cy = (yMin + yMax) / 2;
+  const normCenter = renderer.normalizationFunction({ x: cx, y: cy });
+  const normXmin   = renderer.normalizationFunction({ x: xMin, y: cy });
+  const normXmax   = renderer.normalizationFunction({ x: xMax, y: cy });
+  const normYmin   = renderer.normalizationFunction({ x: cx, y: yMin });
+  const normYmax   = renderer.normalizationFunction({ x: cx, y: yMax });
 
-    {
-      selector: 'edge',
-      style: {
-        'width': 0.8,
-        'line-color': COLORS.edgeDefault,
-        'target-arrow-color': COLORS.edgeDefault,
-        'target-arrow-shape': 'none',
-        'curve-style': 'bezier',
-        'opacity': 1,
-        'transition-property': 'line-color, width, opacity',
-        'transition-duration': '150ms',
-      }
-    },
-    {
-      selector: 'edge[target ^= "#"]',
-      style: {
-        'line-color': 'rgba(99,102,241,0.08)',
-        'width': 0.6,
-      }
-    },
+  const normW = normXmax.x - normXmin.x;
+  const normH = normYmax.y - normYmin.y;
 
-    {
-      selector: 'node.hovered',
-      style: {
-        'background-color': COLORS.nodeHover,
-        'shadow-blur': 22,
-        'shadow-color': COLORS.glowHover,
-        'shadow-opacity': 1,
-        'color': 'rgba(34,197,94,0.8)',
-      }
-    },
+  const { width, height } = renderer.getDimensions();
+  // sigma viewport transform: vp = (norm - cam) * effective / ratio + center
+  // effective = width - 2 * stagePadding (we set stagePadding=40)
+  // visible norm span: width * ratio / effective (x), height * ratio / effective (y)
+  const stagePadding = 40;
+  const effective = width - 2 * stagePadding;
+  const fill = 0.82;
+  const ratioX = normW > 0 ? normW * effective / (fill * width)  : 0.5;
+  const ratioY = normH > 0 ? normH * effective / (fill * height) : 0.5;
+  const ratio  = Math.max(ratioX, ratioY, 0.05);
 
-    {
-      selector: 'node.neighbor',
-      style: {
-        'background-color': COLORS.nodeNeighbor,
-        'shadow-blur': 10,
-        'shadow-color': COLORS.glowSelected,
-        'shadow-opacity': 0.7,
-        'color': 'rgba(134,239,172,0.75)',
-      }
-    },
-
-    {
-      selector: 'node.selected',
-      style: {
-        'background-color': COLORS.nodeSelected,
-        'shadow-blur': 22,
-        'shadow-color': COLORS.glowSelected,
-        'shadow-opacity': 1,
-        'color': 'rgba(74,222,128,0.9)',
-        'border-width': 0,
-      }
-    },
-
-    {
-      selector: 'edge.edge-active',
-      style: {
-        'line-color': COLORS.edgeActive,
-        'target-arrow-color': COLORS.edgeActive,
-        'width': 1.4,
-        'opacity': 0.85,
-      }
-    },
-
-    {
-      selector: '.faded',
-      style: { 'opacity': 0.12 }
-    },
-
-    {
-      selector: 'node.search-match',
-      style: {
-        'background-color': COLORS.nodeSelected,
-        'shadow-blur': 14,
-        'shadow-color': COLORS.glowSelected,
-        'shadow-opacity': 0.7,
-        'color': 'rgba(74,222,128,0.9)',
-        'border-width': 0,
-      }
-    },
-  ];
+  const target = { x: normCenter.x, y: normCenter.y, ratio, angle: 0 };
+  if (animated) {
+    renderer.getCamera().animate(target, { duration: 500, easing: 'quadraticInOut' });
+  } else {
+    renderer.getCamera().setState(target);
+  }
+  renderer.refresh();
 }
 
-// ────────────────────────────────────────────────
-// ÉVÉNEMENTS CYTOSCAPE
-// ────────────────────────────────────────────────
+// ── Layout circulaire (positions initiales stables) ──
+function circularLayout(graph) {
+  const nodes = graph.nodes();
+  const n = nodes.length;
+  const radius = Math.max(100, n * 4);
+  nodes.forEach((node, i) => {
+    const angle = (2 * Math.PI * i) / n;
+    graph.setNodeAttribute(node, 'x', radius * Math.cos(angle));
+    graph.setNodeAttribute(node, 'y', radius * Math.sin(angle));
+  });
+}
 
-function bindCytoscapeEvents() {
-  const tooltip     = document.getElementById('node-tooltip');
-  const tooltipName = document.getElementById('tooltip-name');
-  const tooltipMeta = document.getElementById('tooltip-meta');
+// ── Spring layout stable (avec clamping des forces) ──
+function springStep(iterations) {
+  if (!graph) return;
+  const nodes   = graph.nodes();
+  const n       = nodes.length;
+  const REPULSION  = 4000;
+  const ATTRACTION = 0.008;
+  const DAMPING    = 0.55;
+  const MIN_DIST   = 15;
+  const MAX_VEL    = 30;
 
-  cy.on('mousemove', (evt) => {
+  // Index O(1) pour l'attraction (évite indexOf O(n) dans la boucle)
+  const nodeIndex = {};
+  nodes.forEach((nd, i) => { nodeIndex[nd] = i; });
+
+  const vx = new Float32Array(n);
+  const vy = new Float32Array(n);
+  const xs = nodes.map(nd => graph.getNodeAttribute(nd, 'x'));
+  const ys = nodes.map(nd => graph.getNodeAttribute(nd, 'y'));
+
+  for (let iter = 0; iter < iterations; iter++) {
+    // Repulsion
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = xs[j] - xs[i], dy = ys[j] - ys[i];
+        const dist  = Math.max(MIN_DIST, Math.sqrt(dx * dx + dy * dy));
+        const force = REPULSION / (dist * dist);
+        const fx = force * dx / dist, fy = force * dy / dist;
+        vx[i] -= fx; vy[i] -= fy;
+        vx[j] += fx; vy[j] += fy;
+      }
+    }
+    // Attraction
+    graph.forEachEdge((_e, _a, src, tgt) => {
+      const si = nodeIndex[src], ti = nodeIndex[tgt];
+      if (si === undefined || ti === undefined) return;
+      const dx = xs[ti] - xs[si], dy = ys[ti] - ys[si];
+      vx[si] += ATTRACTION * dx; vy[si] += ATTRACTION * dy;
+      vx[ti] -= ATTRACTION * dx; vy[ti] -= ATTRACTION * dy;
+    });
+    // Appliquer avec clamp
+    for (let i = 0; i < n; i++) {
+      vx[i] *= DAMPING; vy[i] *= DAMPING;
+      const spd = Math.sqrt(vx[i] * vx[i] + vy[i] * vy[i]);
+      if (spd > MAX_VEL) { vx[i] = vx[i] / spd * MAX_VEL; vy[i] = vy[i] / spd * MAX_VEL; }
+      xs[i] += vx[i]; ys[i] += vy[i];
+    }
+  }
+  // Écrire les positions finales dans le graphe
+  nodes.forEach((nd, i) => {
+    graph.setNodeAttribute(nd, 'x', xs[i]);
+    graph.setNodeAttribute(nd, 'y', ys[i]);
+  });
+}
+
+// ── Événements sigma ──────────────────────────
+function bindSigmaEvents() {
+  const cyDiv = document.getElementById('cy');
+
+  // Tooltip : suit la souris
+  cyDiv.addEventListener('mousemove', (e) => {
     if (tooltip.classList.contains('visible')) {
-      tooltip.style.left = evt.originalEvent.clientX + 'px';
-      tooltip.style.top  = evt.originalEvent.clientY + 'px';
+      tooltip.style.left = e.clientX + 'px';
+      tooltip.style.top  = e.clientY + 'px';
     }
   });
 
-  cy.on('mouseover', 'node', (evt) => {
-    const node = evt.target;
+  renderer.on('enterNode', ({ node }) => {
+    state.hoveredNode = node;
+    refreshNeighbors();
 
-    // Show tooltip
-    const id     = node.data('id');
-    const type   = node.data('type');
-    const ghost  = node.data('ghost');
-    const degree = node.data('degree') || 0;
-    tooltipName.textContent = id;
+    const attrs = graph.getNodeAttributes(node);
+    tooltipName.textContent = node;
     tooltipMeta.textContent =
-      type === 'tag'          ? `#tag · ${degree} note${degree !== 1 ? 's' : ''}` :
-      ghost                   ? 'note fantôme' :
-                                `${degree} lien${degree !== 1 ? 's' : ''}`;
-    tooltip.style.left = evt.originalEvent.clientX + 'px';
-    tooltip.style.top  = evt.originalEvent.clientY + 'px';
+      attrs.ntype === 'tag' ? `#tag · ${attrs.degree} note${attrs.degree !== 1 ? 's' : ''}` :
+      attrs.ghost           ? 'note fantôme' :
+                              `${attrs.degree} lien${attrs.degree !== 1 ? 's' : ''}`;
+    tooltip.style.left = '-200px'; // positionnement initial hors écran
     tooltip.classList.add('visible');
-
-    if (hasSelection) return;
-
-    const neighbors = node.neighborhood();
-    cy.elements().addClass('faded');
-    node.removeClass('faded').addClass('hovered');
-    neighbors.nodes().removeClass('faded').addClass('neighbor');
-    neighbors.edges().removeClass('faded').addClass('edge-active');
+    renderer.refresh();
   });
 
-  cy.on('mouseout', 'node', () => {
+  renderer.on('leaveNode', () => {
+    state.hoveredNode = null;
+    activeNeighbors.clear();
     tooltip.classList.remove('visible');
-    if (hasSelection) return;
-    cy.elements().removeClass('faded hovered neighbor edge-active');
+    renderer.refresh();
   });
 
-  // ── Clic sur un nœud → sélection + centrage (comportement Obsidian) ──
-  cy.on('tap', 'node', (evt) => {
-    const node = evt.target;
-    hasSelection = true;
+  renderer.on('clickNode', ({ node }) => {
+    tooltip.classList.remove('visible');
+    state.hoveredNode = null;
+    state.selectedNode = state.selectedNode === node ? null : node;
+    refreshNeighbors();
 
-    cy.elements().removeClass('hovered neighbor faded edge-active selected');
-    cy.elements().addClass('faded');
-
-    const neighbors = node.neighborhood();
-    neighbors.removeClass('faded');
-    neighbors.nodes().addClass('neighbor');
-    neighbors.edges().addClass('edge-active');
-    node.removeClass('faded').addClass('selected');
-
-    // Centrer la vue sur le nœud cliqué (comme Obsidian)
-    cy.animate(
-      { center: { eles: node }, zoom: Math.max(cy.zoom(), 1.1) },
-      { duration: 300, easing: 'ease-in-out-sine' }
-    );
+    if (state.selectedNode) {
+      const attrs = graph.getNodeAttributes(node);
+      const norm  = renderer.normalizationFunction({ x: attrs.x, y: attrs.y });
+      renderer.getCamera().animate(
+        { x: norm.x, y: norm.y, ratio: 0.25 },
+        { duration: 350, easing: 'quadraticInOut' }
+      );
+    }
+    renderer.refresh();
   });
 
-  // ── Clic simple sur le fond → reset immédiat (plus besoin de double-clic) ──
-  cy.on('tap', (evt) => {
-    if (evt.target === cy) resetHighlight();
+  renderer.on('clickStage', () => {
+    state.selectedNode = null;
+    state.hoveredNode  = null;
+    activeNeighbors.clear();
+    renderer.refresh();
+  });
+
+  // Drag nœuds
+  let dragging = false;
+  let dragNode = null;
+
+  renderer.on('downNode', ({ node }) => {
+    dragging = true;
+    dragNode = node;
+    renderer.getCamera().disable();
+  });
+
+  renderer.getMouseCaptor().on('mousemovebody', (e) => {
+    if (!dragging || !dragNode) return;
+    const pos = renderer.viewportToGraph(e);
+    graph.setNodeAttribute(dragNode, 'x', pos.x);
+    graph.setNodeAttribute(dragNode, 'y', pos.y);
+    e.preventSigmaDefault();
+    e.original.preventDefault();
+    e.original.stopPropagation();
+  });
+
+  renderer.getMouseCaptor().on('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    dragNode = null;
+    renderer.getCamera().enable();
   });
 }
 
-/**
- * Remet le graphe dans son état neutre.
- */
-function resetHighlight() {
-  hasSelection = false;
-  cy.elements().removeClass('selected neighbor faded hovered edge-active search-match');
-}
-
-// ────────────────────────────────────────────────
-// FILTRES
-// ────────────────────────────────────────────────
-
+// ── Filtres ───────────────────────────────────
 function applyFilters() {
-  if (!cy) return;
-
-  const showGhosts  = filterGhosts.checked;
+  if (!graph) return;
+  const showGhosts   = filterGhosts.checked;
   const showTagNodes = filterTags.checked;
-  const minDeg      = parseInt(filterDegree.value, 10);
+  const minDeg       = parseInt(filterDegree.value, 10);
 
-  cy.batch(() => {
-    cy.nodes().forEach(node => {
-      const type  = node.data('type');
-      const ghost = node.data('ghost');
-      const deg   = node.data('degree') || 0;
-
-      let visible = true;
-      if (type === 'note' && ghost && !showGhosts) visible = false;
-      if (type === 'tag' && !showTagNodes)          visible = false;
-      if (deg < minDeg)                             visible = false;
-
-      if (visible) node.show(); else node.hide();
-    });
-
-    // Cacher les arêtes dont un endpoint est caché
-    cy.edges().forEach(edge => {
-      if (edge.source().hidden() || edge.target().hidden()) {
-        edge.hide();
-      } else {
-        edge.show();
-      }
-    });
+  graph.forEachNode((node, attrs) => {
+    let hidden = false;
+    if (attrs.ntype === 'note' && attrs.ghost && !showGhosts) hidden = true;
+    if (attrs.ntype === 'tag'  && !showTagNodes)              hidden = true;
+    if (attrs.degree < minDeg)                               hidden = true;
+    graph.setNodeAttribute(node, '_hidden', hidden);
   });
+
+  if (renderer) renderer.refresh();
 }
 
-// ────────────────────────────────────────────────
-// RECHERCHE
-// ────────────────────────────────────────────────
-
+// ── Recherche ─────────────────────────────────
 function applySearch(term) {
-  if (!cy) return;
+  state.searchQuery  = term.toLowerCase().trim();
+  state.selectedNode = null;
+  state.hoveredNode  = null;
+  activeNeighbors.clear();
+  if (!renderer) return;
 
-  cy.elements().removeClass('search-match faded');
-  hasSelection = false;
+  if (state.searchQuery) {
+    let first = null;
+    graph.forEachNode((node, attrs) => {
+      if (!first && node.toLowerCase().includes(state.searchQuery) && !attrs._hidden) first = node;
+    });
+    if (first) {
+      const attrs = graph.getNodeAttributes(first);
+      const norm  = renderer.normalizationFunction({ x: attrs.x, y: attrs.y });
+      renderer.getCamera().animate(
+        { x: norm.x, y: norm.y, ratio: 0.2 },
+        { duration: 350, easing: 'quadraticInOut' }
+      );
+    }
+  }
 
-  if (!term) return;
-
-  const lower = term.toLowerCase();
-  const matches    = cy.nodes().filter(n => n.data('id').toLowerCase().includes(lower) && !n.hidden());
-  const nonMatches = cy.nodes().not(matches).not(':hidden');
-
-  if (!matches.length) return;
-
-  matches.addClass('search-match');
-  nonMatches.addClass('faded');
-  cy.edges().addClass('faded');
-
-  cy.animate({ fit: { eles: matches, padding: 80 } }, { duration: 350 });
+  renderer.refresh();
 }
 
-// ────────────────────────────────────────────────
-// PANNEAU — stats + ghost notes
-// ────────────────────────────────────────────────
-
+// ── Panel stats ───────────────────────────────
 function updatePanelStats(graphData) {
   const ghostCount = graphData.nodes.filter(n => n.data.ghost && n.data.type === 'note').length;
   const noteCount  = graphData.nodes.filter(n => n.data.type === 'note' && !n.data.ghost).length;
-  const el = (id) => document.getElementById(id);
+  const el = id => document.getElementById(id);
   if (el('stat-nodes'))  el('stat-nodes').textContent  = noteCount;
   if (el('stat-edges'))  el('stat-edges').textContent  = graphData.edges.length;
   if (el('stat-ghosts')) el('stat-ghosts').textContent = ghostCount;
 }
 
+// ── Panel ghost notes ──────────────────────────
 function updateGhostPanel(graphData) {
   const ghosts = graphData.nodes.filter(n => n.data.ghost && n.data.type === 'note');
   ghostList.innerHTML = '';
@@ -435,63 +474,55 @@ function updateGhostPanel(graphData) {
     li.textContent = g.data.id;
     li.title = `Note manquante : ${g.data.id}`;
     li.addEventListener('click', () => {
-      const node = cy.$(`node[id = "${g.data.id}"]`);
-      if (node.length) {
-        cy.animate({ center: { eles: node }, zoom: 1.6 }, { duration: 300 });
-        node.emit('tap');
-      }
+      if (!graph || !graph.hasNode(g.data.id)) return;
+      state.selectedNode = g.data.id;
+      refreshNeighbors();
+      const a    = graph.getNodeAttributes(g.data.id);
+      const norm = renderer.normalizationFunction({ x: a.x, y: a.y });
+      renderer.getCamera().animate({ x: norm.x, y: norm.y, ratio: 0.3 }, { duration: 300 });
+      renderer.refresh();
     });
     ghostList.appendChild(li);
   }
 }
 
-// ────────────────────────────────────────────────
-// BARRE DE STATUT
-// ────────────────────────────────────────────────
-
+// ── Barre de statut ───────────────────────────
 function updateStatusBar(graphData) {
   const ghostCount = graphData.nodes.filter(n => n.data.ghost && n.data.type === 'note').length;
   const tagCount   = graphData.nodes.filter(n => n.data.type === 'tag').length;
-
   infoNodes.textContent  = `${graphData.nodes.length} nœuds`;
   infoEdges.textContent  = `${graphData.edges.length} liens`;
   infoGhosts.textContent = `${ghostCount} fantôme${ghostCount !== 1 ? 's' : ''}`;
   infoTags.textContent   = `${tagCount} tag${tagCount !== 1 ? 's' : ''}`;
 }
 
-// ────────────────────────────────────────────────
-// CHARGEMENT DU GRAPHE
-// ────────────────────────────────────────────────
-
+// ── Chargement ────────────────────────────────
 async function loadLiveGraph() {
   try {
     const res = await fetch('/graph');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
-    initCytoscape(data);
+    initGraph(data);
     updateGhostPanel(data);
     updateStatusBar(data);
     updatePanelStats(data);
 
-    // Mettre à jour le max du slider selon le degré max observé
-    const maxDeg = Math.max(0, ...data.nodes.map(n => n.data.degree || 0));
+    const maxDeg = Math.max(0, ...data.nodes.map(n => {
+      return data.edges.filter(e => e.data.source === n.data.id || e.data.target === n.data.id).length;
+    }));
     filterDegree.max = maxDeg || 20;
   } catch (err) {
     console.error('Impossible de charger le graphe :', err);
   }
 }
 
-// ────────────────────────────────────────────────
-// HISTORIQUE
-// ────────────────────────────────────────────────
-
+// ── Historique ────────────────────────────────
 async function loadSnapshotList() {
   try {
     const res = await fetch('/history');
     const snapshots = await res.json();
     snapshotSelect.innerHTML = '<option value="">— Charger un snapshot —</option>';
-
     for (const s of snapshots) {
       const opt = document.createElement('option');
       opt.value = s.filename;
@@ -527,16 +558,14 @@ async function loadSnapshot(filename) {
   try {
     const res = await fetch(`/history/${filename}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const { graph } = await res.json();
-
-    initCytoscape(graph);
-    updateGhostPanel(graph);
-    updateStatusBar(graph);
-    updatePanelStats(graph);
-
+    const { graph: g } = await res.json();
+    initGraph(g);
+    updateGhostPanel(g);
+    updateStatusBar(g);
+    updatePanelStats(g);
     isReadOnly = true;
     readonlyBadge.style.display = 'inline';
-    btnLive.style.display = 'inline';
+    btnLive.style.display       = 'inline';
   } catch (err) {
     console.error('Impossible de charger le snapshot :', err);
   }
@@ -545,29 +574,21 @@ async function loadSnapshot(filename) {
 async function returnToLive() {
   isReadOnly = false;
   readonlyBadge.style.display = 'none';
-  btnLive.style.display = 'none';
-  snapshotSelect.value = '';
+  btnLive.style.display       = 'none';
+  snapshotSelect.value        = '';
   await loadLiveGraph();
 }
 
-// ────────────────────────────────────────────────
-// SSE — auto-refresh
-// ────────────────────────────────────────────────
-
+// ── SSE ───────────────────────────────────────
 function connectSSE() {
   const evtSource = new EventSource('/watch');
-
-  evtSource.addEventListener('connected', () => {
-    liveIndicator.classList.remove('offline');
-  });
-
+  evtSource.addEventListener('connected', () => liveIndicator.classList.remove('offline'));
   evtSource.addEventListener('change', async () => {
     if (!isReadOnly) {
       await loadLiveGraph();
       await loadSnapshotList();
     }
   });
-
   evtSource.onerror = () => {
     liveIndicator.classList.add('offline');
     evtSource.close();
@@ -575,13 +596,11 @@ function connectSSE() {
   };
 }
 
-// ────────────────────────────────────────────────
-// ÉVÉNEMENTS UI
-// ────────────────────────────────────────────────
-
+// ── Événements UI ────────────────────────────
 btnToggle.addEventListener('click', () => {
   panel.classList.toggle('collapsed');
   btnToggle.title = panel.classList.contains('collapsed') ? 'Déplier' : 'Réduire';
+  if (renderer) renderer.refresh();
 });
 
 btnSave.addEventListener('click', saveSnapshot);
@@ -598,50 +617,39 @@ searchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     searchInput.value = '';
     searchClear.classList.remove('visible');
-    resetHighlight();
+    applySearch('');
   }
 });
 
 searchClear.addEventListener('click', () => {
   searchInput.value = '';
   searchClear.classList.remove('visible');
-  resetHighlight();
+  applySearch('');
   searchInput.focus();
 });
 
 filterGhosts.addEventListener('change', applyFilters);
 filterTags.addEventListener('change', applyFilters);
-
-// Direction des arêtes — affiche ou cache les flèches
-filterDirections.addEventListener('change', () => {
-  if (!cy) return;
-  const show = filterDirections.checked;
-  cy.batch(() => {
-    // Arêtes bidirectionnelles → flèches des deux côtés
-    cy.edges('[?bidirectional]').style({
-      'source-arrow-shape': show ? 'triangle' : 'none',
-      'source-arrow-color': COLORS.edgeDefault,
-      'target-arrow-shape': show ? 'triangle' : 'none',
-      'target-arrow-color': COLORS.edgeDefault,
-      'arrow-scale': 0.45,
-    });
-    // Arêtes unidirectionnelles → flèche uniquement vers la cible
-    cy.edges('[!bidirectional]').style({
-      'source-arrow-shape': 'none',
-      'target-arrow-shape': show ? 'triangle' : 'none',
-      'target-arrow-color': COLORS.edgeDefault,
-      'arrow-scale': 0.45,
-    });
-  });
-});
 filterDegree.addEventListener('input', () => {
   filterDegreeVal.textContent = filterDegree.value;
   applyFilters();
 });
 
-// ────────────────────────────────────────────────
-// DÉMARRAGE
-// ────────────────────────────────────────────────
+filterDirections.addEventListener('change', () => {
+  if (!graph || !renderer) return;
+  const show = filterDirections.checked;
+  // Sigma v2 : type 'arrow' pour les arêtes dirigées, 'line' pour non-dirigées
+  graph.forEachEdge((edge, attrs) => {
+    if (show) {
+      graph.setEdgeAttribute(edge, 'type', attrs.bidirectional ? 'line' : 'arrow');
+    } else {
+      graph.setEdgeAttribute(edge, 'type', 'line');
+    }
+  });
+  renderer.refresh();
+});
+
+// ── Démarrage ────────────────────────────────
 (async () => {
   await loadLiveGraph();
   await loadSnapshotList();
