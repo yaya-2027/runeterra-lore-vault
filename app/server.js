@@ -18,8 +18,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 /**
  * Parcourt récursivement un dossier et retourne tous les fichiers .md trouvés.
- * @param {string} dir - Chemin du dossier à explorer
- * @returns {string[]} - Liste de chemins absolus vers les fichiers .md
  */
 function collectMarkdownFiles(dir) {
   let results = [];
@@ -39,15 +37,12 @@ function collectMarkdownFiles(dir) {
 
 /**
  * Extrait tous les liens [[noteName]] depuis le contenu d'un fichier Markdown.
- * @param {string} content - Contenu brut du fichier
- * @returns {string[]} - Liste des noms de notes liées
  */
 function extractLinks(content) {
   const regex = /\[\[(.*?)\]\]/g;
   const links = [];
   let match;
   while ((match = regex.exec(content)) !== null) {
-    // On retire l'alias éventuel (ex: [[note|alias]] → "note")
     const target = match[1].split('|')[0].trim();
     if (target) links.push(target);
   }
@@ -55,13 +50,34 @@ function extractLinks(content) {
 }
 
 /**
+ * Extrait tous les #tags inline depuis le contenu Markdown.
+ * Exclut les titres (# Titre ont un espace après #).
+ * Exclut les blocs de code pour éviter les faux positifs.
+ */
+function extractTags(content) {
+  // Supprimer les blocs de code fenced et inline
+  const withoutCode = content
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`[^`]+`/g, '');
+
+  // #tag : # suivi directement d'une lettre, non précédé d'un autre #
+  const regex = /(?<!#)#([a-zA-Z][a-zA-Z0-9_-]*)/g;
+  const tags = new Set();
+  let match;
+  while ((match = regex.exec(withoutCode)) !== null) {
+    tags.add(match[1].toLowerCase());
+  }
+  return Array.from(tags);
+}
+
+/**
  * Construit le graphe complet à partir des fichiers .md dans /notes.
- * Retourne un objet { nodes, edges } compatible avec Cytoscape.js.
+ * Inclut les nœuds de notes, nœuds fantômes et nœuds de tags.
  */
 function buildGraph() {
   const files = collectMarkdownFiles(NOTES_DIR);
 
-  // Map : nom de note → { id, ghost }
+  // Map : identifiant → données du nœud
   const nodeMap = new Map();
   // Liste brute des liens : { source, target }
   const rawEdges = [];
@@ -69,34 +85,59 @@ function buildGraph() {
   // Première passe : enregistrer tous les nœuds réels
   for (const filePath of files) {
     const name = path.basename(filePath, '.md');
-    nodeMap.set(name, { id: name, ghost: false });
+    nodeMap.set(name, { id: name, ghost: false, type: 'note' });
   }
 
-  // Deuxième passe : extraire les liens et détecter les nœuds fantômes
+  // Deuxième passe : extraire les liens [[wikilinks]] et les #tags
   for (const filePath of files) {
     const name = path.basename(filePath, '.md');
     const content = fs.readFileSync(filePath, 'utf-8');
-    const links = extractLinks(content);
 
+    // Liens entre notes
+    const links = extractLinks(content);
     for (const target of links) {
-      // Si la cible n'existe pas en tant que fichier réel → nœud fantôme
       if (!nodeMap.has(target)) {
-        nodeMap.set(target, { id: target, ghost: true });
+        nodeMap.set(target, { id: target, ghost: true, type: 'note' });
       }
       rawEdges.push({ source: name, target });
     }
-  }
 
-  // Supprimer les doublons d'arêtes
-  const edgeSet = new Set();
-  const edges = [];
-  for (const edge of rawEdges) {
-    const key = `${edge.source}→${edge.target}`;
-    if (!edgeSet.has(key)) {
-      edgeSet.add(key);
-      edges.push({ data: edge });
+    // Tags #hashtag → nœud de type "tag"
+    const tags = extractTags(content);
+    for (const tag of tags) {
+      const tagId = `#${tag}`;
+      if (!nodeMap.has(tagId)) {
+        nodeMap.set(tagId, { id: tagId, ghost: false, type: 'tag' });
+      }
+      rawEdges.push({ source: name, target: tagId });
     }
   }
+
+  // Étape 1 : dédupliquer les arêtes directionnelles identiques
+  const directedSet = new Set();
+  const directedEdges = [];
+  for (const edge of rawEdges) {
+    const key = `${edge.source}→${edge.target}`;
+    if (!directedSet.has(key)) {
+      directedSet.add(key);
+      directedEdges.push(edge);
+    }
+  }
+
+  // Étape 2 : fusionner A→B et B→A en une seule arête bidirectionnelle
+  // Résultat : une seule ligne par paire de notes (comme Obsidian par défaut)
+  const pairMap = new Map();
+  for (const edge of directedEdges) {
+    const pairKey = [edge.source, edge.target].sort().join('↔');
+    if (pairMap.has(pairKey)) {
+      // Les deux sens existent → bidirectionnel
+      pairMap.get(pairKey).bidirectional = true;
+    } else {
+      pairMap.set(pairKey, { source: edge.source, target: edge.target, bidirectional: false });
+    }
+  }
+
+  const edges = Array.from(pairMap.values()).map(e => ({ data: e }));
 
   const nodes = Array.from(nodeMap.values()).map(n => ({ data: n }));
   return { nodes, edges };
@@ -104,12 +145,10 @@ function buildGraph() {
 
 // ─────────────────────────────────────────────
 // Endpoint : GET /graph
-// Retourne le graphe courant (nœuds + arêtes)
 // ─────────────────────────────────────────────
 app.get('/graph', (req, res) => {
   try {
-    const graph = buildGraph();
-    res.json(graph);
+    res.json(buildGraph());
   } catch (err) {
     console.error('Erreur lors de la construction du graphe :', err);
     res.status(500).json({ error: 'Impossible de construire le graphe.' });
@@ -117,13 +156,31 @@ app.get('/graph', (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+// Endpoint : GET /notes/:name
+// Retourne le contenu Markdown brut d'une note
+// ─────────────────────────────────────────────
+app.get('/notes/:name', (req, res) => {
+  const name = path.basename(req.params.name); // sécurisation path traversal
+  const files = collectMarkdownFiles(NOTES_DIR);
+  const filePath = files.find(f => path.basename(f, '.md') === name);
+
+  if (!filePath) {
+    return res.status(404).json({ error: 'Note introuvable.' });
+  }
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    res.json({ name, content });
+  } catch (err) {
+    console.error('Erreur lecture note :', err);
+    res.status(500).json({ error: 'Impossible de lire la note.' });
+  }
+});
+
+// ─────────────────────────────────────────────
 // Endpoints : Historique (snapshots JSON)
 // ─────────────────────────────────────────────
 
-/**
- * POST /history/save
- * Sauvegarde un snapshot horodaté du graphe courant dans /history.
- */
 app.post('/history/save', (req, res) => {
   try {
     const graph = buildGraph();
@@ -134,15 +191,11 @@ app.post('/history/save', (req, res) => {
     fs.writeFileSync(filePath, JSON.stringify({ savedAt: new Date().toISOString(), graph }, null, 2));
     res.json({ success: true, filename });
   } catch (err) {
-    console.error('Erreur lors de la sauvegarde du snapshot :', err);
+    console.error('Erreur sauvegarde snapshot :', err);
     res.status(500).json({ error: 'Impossible de sauvegarder le snapshot.' });
   }
 });
 
-/**
- * GET /history
- * Retourne la liste des snapshots disponibles dans /history.
- */
 app.get('/history', (req, res) => {
   try {
     if (!fs.existsSync(HISTORY_DIR)) return res.json([]);
@@ -150,25 +203,19 @@ app.get('/history', (req, res) => {
     const files = fs.readdirSync(HISTORY_DIR)
       .filter(f => f.endsWith('.json'))
       .map(f => {
-        const filePath = path.join(HISTORY_DIR, f);
-        const stat = fs.statSync(filePath);
+        const stat = fs.statSync(path.join(HISTORY_DIR, f));
         return { filename: f, createdAt: stat.birthtime };
       })
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.json(files);
   } catch (err) {
-    console.error('Erreur lors de la lecture des snapshots :', err);
     res.status(500).json({ error: 'Impossible de lire les snapshots.' });
   }
 });
 
-/**
- * GET /history/:filename
- * Retourne le contenu d'un snapshot précis.
- */
 app.get('/history/:filename', (req, res) => {
-  const filename = path.basename(req.params.filename); // sécurisation path traversal
+  const filename = path.basename(req.params.filename);
   const filePath = path.join(HISTORY_DIR, filename);
 
   if (!fs.existsSync(filePath)) {
@@ -176,81 +223,53 @@ app.get('/history/:filename', (req, res) => {
   }
 
   try {
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    res.json(data);
+    res.json(JSON.parse(fs.readFileSync(filePath, 'utf-8')));
   } catch (err) {
-    console.error('Erreur lors de la lecture du snapshot :', err);
     res.status(500).json({ error: 'Impossible de lire le snapshot.' });
   }
 });
 
 // ─────────────────────────────────────────────
-// SSE : GET /watch
-// Notifie le frontend en temps réel via Server-Sent Events
-// quand un fichier .md change dans /notes
+// SSE : GET /watch — notifications temps réel
 // ─────────────────────────────────────────────
-
-// Liste des clients SSE connectés
 const sseClients = [];
 
 app.get('/watch', (req, res) => {
-  // Configuration des headers SSE
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
-
-  // Envoi d'un ping initial pour confirmer la connexion
   res.write('event: connected\ndata: ok\n\n');
 
-  // Enregistrement du client
   sseClients.push(res);
-
-  // Nettoyage quand le client se déconnecte
   req.on('close', () => {
-    const index = sseClients.indexOf(res);
-    if (index !== -1) sseClients.splice(index, 1);
+    const i = sseClients.indexOf(res);
+    if (i !== -1) sseClients.splice(i, 1);
   });
 });
 
-/**
- * Notifie tous les clients SSE connectés qu'un changement a eu lieu.
- * @param {string} eventType - Type d'événement (change, add, unlink)
- * @param {string} filePath - Chemin du fichier concerné
- */
 function notifyClients(eventType, filePath) {
-  const filename = path.basename(filePath);
-  const payload = JSON.stringify({ event: eventType, file: filename });
+  const payload = JSON.stringify({ event: eventType, file: path.basename(filePath) });
   for (const client of sseClients) {
     client.write(`event: change\ndata: ${payload}\n\n`);
   }
 }
 
-// Surveillance du dossier /notes avec chokidar
 const watcher = chokidar.watch(NOTES_DIR, {
-  ignored: /(^|[\/\\])\../, // ignorer les fichiers cachés
+  ignored: /(^|[\/\\])\../,
   persistent: true,
   ignoreInitial: true,
 });
 
 watcher
-  .on('add', filePath => {
-    console.log(`[watch] Fichier ajouté : ${path.basename(filePath)}`);
-    notifyClients('add', filePath);
-  })
-  .on('change', filePath => {
-    console.log(`[watch] Fichier modifié : ${path.basename(filePath)}`);
-    notifyClients('change', filePath);
-  })
-  .on('unlink', filePath => {
-    console.log(`[watch] Fichier supprimé : ${path.basename(filePath)}`);
-    notifyClients('unlink', filePath);
-  });
+  .on('add',    f => { console.log(`[watch] ajouté : ${path.basename(f)}`);    notifyClients('add', f); })
+  .on('change', f => { console.log(`[watch] modifié : ${path.basename(f)}`);   notifyClients('change', f); })
+  .on('unlink', f => { console.log(`[watch] supprimé : ${path.basename(f)}`);  notifyClients('unlink', f); });
 
 // ─────────────────────────────────────────────
-// Démarrage du serveur
+// Démarrage
 // ─────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`VaultGraph démarré sur http://localhost:${PORT}`);
+  console.log(`Synweft démarré sur http://localhost:${PORT}`);
   console.log(`Notes surveillées dans : ${NOTES_DIR}`);
 });
