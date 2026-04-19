@@ -95,20 +95,52 @@ function refreshNeighbors() {
   }
 }
 
+// ── LOI 1 — Taille des nœuds selon degré ─────
+// Plus un nœud est connecté, plus il est grand
+function getBaseSize(isGhost, isTag, deg) {
+  if (isGhost)   return 3;
+  if (isTag)     return 3.5;
+  if (deg > 12)  return 8;
+  if (deg > 6)   return 5.5;
+  if (deg > 2)   return 4;
+  return 3;
+}
+
+// ── LOI 2 — Opacité des nœuds selon degré ────
+// Les hubs sont opaques, les feuilles transparentes
+function getNodeOpacity(deg) {
+  if (deg > 12) return { fill: 0.22, stroke: 1.0,  strokeW: 1.4 };
+  if (deg > 6)  return { fill: 0.15, stroke: 0.70, strokeW: 1.0 };
+  if (deg > 2)  return { fill: 0.12, stroke: 0.50, strokeW: 0.8 };
+  return              { fill: 0.08, stroke: 0.35, strokeW: 0.6 };
+}
+
 // ── Reducers (appelés chaque frame par sigma) ──
 function nodeReducer(node, data) {
   const res = { ...data, type: 'circle' };
   if (data._hidden) { res.hidden = true; return res; }
 
-  const isGhost  = data.ghost === true;
-  const isTag    = data.ntype === 'tag';
-  const deg      = data.degree || 0;
-  const baseSize = isGhost ? 4 : isTag ? 5 : deg > 8 ? 9 : deg > 4 ? 6 : 5;
+  const isGhost    = data.ghost === true;
+  const isTag      = data.ntype === 'tag';
+  const deg        = graph.degree(node);
 
-  res.size  = baseSize * uiSettings.nodeScale;
+  // LOI 1 — Taille stricte selon degré
+  res.size = getBaseSize(isGhost, isTag, deg) * uiSettings.nodeScale;
+
+  // LOI 4 — Toujours circle pour que les liens s'arrêtent au bord
+  res.type = 'circle';
+
   // Couleur WebGL = fond opaque → masque l'arête à l'intérieur du nœud.
   // L'apparence réelle (cercle vitré / triangle tag) est dessinée par drawNodeOverlay().
   res.color = '#09060F';
+
+  // LOI 6 — Les hubs sont au-dessus des autres nœuds
+  res.zIndex = isTag || isGhost ? 1 : deg > 6 ? 3 : deg > 2 ? 2 : 1;
+
+  // Recherche — estompe les non-matchs (supprime le label)
+  if (state.searchQuery && !node.toLowerCase().includes(state.searchQuery)) {
+    res.label = '';
+  }
 
   return res;
 }
@@ -123,19 +155,26 @@ function edgeReducer(edge, data) {
   if (srcData._hidden || tgtData._hidden) { res.hidden = true; return res; }
 
   const isGhostEdge = srcData.ghost || tgtData.ghost;
-  const degSum      = (srcData.degree || 0) + (tgtData.degree || 0);
+  const degSum      = graph.degree(src) + graph.degree(tgt);
 
+  // ── Lien fantôme — rose, trait plein, fin
   if (isGhostEdge) {
-    res.color = 'rgba(244,114,182,0.32)';
-    res.size  = 0.7 * uiSettings.edgeScale;
+    res.color  = 'rgba(244,114,182,0.28)';
+    res.size   = 0.6 * uiSettings.edgeScale;
+    res.zIndex = 0;
     return res;
   }
 
-  const t       = Math.min(1, degSum / 20);
-  const opacity = 0.18 + t * 0.32;
-  const weight  = 0.7  + t * 0.9;
-  res.color = `rgba(168,85,247,${opacity.toFixed(2)})`;
-  res.size  = weight * uiSettings.edgeScale;
+  // ── Lien normal — violet, intensité selon degré des deux nœuds
+  // LOI — Plus les nœuds sont connectés, plus le lien est visible
+  const t       = Math.min(1, degSum / 24);
+  const opacity = 0.12 + t * 0.30;   // 0.12 → 0.42
+  const weight  = 0.5  + t * 0.8;    // 0.5  → 1.3
+
+  res.color  = `rgba(168,85,247,${opacity.toFixed(2)})`;
+  res.size   = weight * uiSettings.edgeScale;
+  // LOI 6 — Les liens entre hubs sont au-dessus des liens faibles
+  res.zIndex = degSum > 20 ? 2 : 1;
 
   return res;
 }
@@ -194,43 +233,49 @@ function drawNodeOverlay() {
     const deg      = attrs.degree || 0;
     const isGhost  = attrs.ghost === true;
     const isTag    = attrs.ntype === 'tag';
-    const baseSize = isGhost ? 4 : isTag ? 5 : deg > 8 ? 9 : deg > 4 ? 6 : 5;
+    // LOI 1 — taille cohérente avec nodeReducer
+    const baseSize = getBaseSize(isGhost, isTag, deg);
     const r        = baseSize * uiSettings.nodeScale * sizeScale;
     if (r < 0.4) return;
 
     const isHov = node === state.hoveredNode;
     const isSel = node === state.selectedNode;
 
+    const isDimmed = !!(state.searchQuery && !node.toLowerCase().includes(state.searchQuery));
+
     overlayCtx.save();
     if (isTag) {
-      _drawTagNode(vp.x, vp.y, r, isHov);
+      _drawTagNode(vp.x, vp.y, r, isHov, isDimmed);
     } else {
-      _drawNoteNode(vp.x, vp.y, r, deg, isGhost, isHov, isSel);
+      _drawNoteNode(vp.x, vp.y, r, deg, isGhost, isHov, isSel, isDimmed);
     }
     overlayCtx.restore();
   });
 }
 
-function _drawNoteNode(x, y, r, deg, isGhost, isHov, isSel) {
+function _drawNoteNode(x, y, r, deg, isGhost, isHov, isSel, isDimmed) {
   // 1. Fond opaque → couvre le segment d'arête à l'intérieur du cercle
   overlayCtx.beginPath();
   overlayCtx.arc(x, y, r, 0, Math.PI * 2);
   overlayCtx.fillStyle = '#09060F';
   overlayCtx.fill();
 
-  // 2. Remplissage vitré
+  // 2. Remplissage vitré — LOI 2 : opacité selon degré
   let fill, stroke, sw;
-  if (isGhost) {
+  if (isDimmed) {
+    // Recherche : non-match — très estompé
+    fill   = 'rgba(168,85,247,0.03)';
+    stroke = 'rgba(168,85,247,0.06)';
+    sw     = 0.5;
+  } else if (isGhost) {
     fill   = 'rgba(244,114,182,0.07)';
     stroke = isHov ? 'rgba(244,114,182,0.95)' : 'rgba(244,114,182,0.45)';
     sw     = isHov ? 1.5 : 0.8;
   } else {
-    const fop = isHov || isSel ? 0.40 : deg > 8 ? 0.28 : deg > 4 ? 0.18 : 0.12;
-    const sop = isHov || isSel ? 1.0  : deg > 8 ? 1.0  : deg > 4 ? 0.80 : 0.55;
-    const ssw = isHov || isSel ? 2.0  : deg > 8 ? 1.6  : deg > 4 ? 1.2  : 0.9;
-    fill   = `rgba(168,85,247,${fop})`;
-    stroke = isHov || isSel ? '#A855F7' : `rgba(168,85,247,${sop})`;
-    sw     = ssw;
+    const op = getNodeOpacity(deg);
+    fill   = isHov || isSel ? 'rgba(168,85,247,0.35)' : `rgba(168,85,247,${op.fill})`;
+    stroke = isHov || isSel ? '#A855F7'               : `rgba(168,85,247,${op.stroke})`;
+    sw     = isHov || isSel ? 1.8                     : op.strokeW;
   }
 
   overlayCtx.beginPath();
@@ -242,7 +287,7 @@ function _drawNoteNode(x, y, r, deg, isGhost, isHov, isSel) {
   overlayCtx.stroke();
 }
 
-function _drawTagNode(x, y, r, isHov) {
+function _drawTagNode(x, y, r, isHov, isDimmed) {
   const h = r * 1.3; // légèrement plus grand pour équilibrer visuellement
   overlayCtx.beginPath();
   overlayCtx.moveTo(x,            y - h);
@@ -253,12 +298,12 @@ function _drawTagNode(x, y, r, isHov) {
   // Fond opaque
   overlayCtx.fillStyle = '#09060F';
   overlayCtx.fill();
-  // Fill magenta vitré
-  overlayCtx.fillStyle = isHov ? 'rgba(224,64,251,0.22)' : 'rgba(224,64,251,0.10)';
+  // Fill magenta vitré (ou estompé si non-match)
+  overlayCtx.fillStyle = isDimmed ? 'rgba(224,64,251,0.03)' : isHov ? 'rgba(224,64,251,0.22)' : 'rgba(224,64,251,0.10)';
   overlayCtx.fill();
   // Contour
-  overlayCtx.strokeStyle = isHov ? 'rgba(224,64,251,0.90)' : 'rgba(224,64,251,0.55)';
-  overlayCtx.lineWidth   = isHov ? 1.2 : 0.8;
+  overlayCtx.strokeStyle = isDimmed ? 'rgba(224,64,251,0.06)' : isHov ? 'rgba(224,64,251,0.90)' : 'rgba(224,64,251,0.55)';
+  overlayCtx.lineWidth   = isDimmed ? 0.5 : isHov ? 1.2 : 0.8;
   overlayCtx.stroke();
 }
 
@@ -268,26 +313,31 @@ function _drawTagNode(x, y, r, isHov) {
 // extérieur et le label — sans aucun rectangle noir.
 function customDrawNodeHover(context, data, settings) {
   const isGhost = data.ghost === true;
+  const isTag   = data.ntype === 'tag';
   const size    = data.size;
   const x       = data.x;
   const y       = data.y;
 
-  // Halo extérieur
+  // Halo extérieur subtil
   context.beginPath();
   context.arc(x, y, size + 6, 0, Math.PI * 2);
-  context.fillStyle = isGhost ? 'rgba(244,114,182,0.10)' : 'rgba(168,85,247,0.12)';
+  context.fillStyle = isTag
+    ? 'rgba(224,64,251,0.10)'
+    : isGhost
+    ? 'rgba(244,114,182,0.10)'
+    : 'rgba(168,85,247,0.12)';
   context.fill();
 
-  // Label avec fond semi-transparent (pas de rectangle noir)
+  // Label — fond sombre, PAS de rectangle noir sigma
   if (data.label) {
-    const fs = Math.max(settings.labelSize || 12, 12);
+    const fs = Math.max(settings.labelSize || 12, 11);
     context.font = `500 ${fs}px IBM Plex Sans, sans-serif`;
     const tw = context.measureText(data.label).width;
-    const ly = y - size - 10;
+    const ly = y - size - 8;
 
     context.fillStyle = 'rgba(9,6,15,0.85)';
     context.beginPath();
-    context.roundRect(x - tw / 2 - 6, ly - fs, tw + 12, fs + 6, 3);
+    context.roundRect(x - tw / 2 - 6, ly - fs, tw + 12, fs + 5, 3);
     context.fill();
 
     context.fillStyle = '#EDE8F5';
@@ -445,21 +495,25 @@ function initGraph(graphData) {
 
   // Rendu sigma.js (WebGL)
   renderer = new Sigma(graph, document.getElementById('cy'), {
-    renderEdgeLabels:   false,
-    allowInvalidContainer: true,
-    defaultNodeType:    'circle',
-    minCameraRatio:     0.005,
-    maxCameraRatio:     20,
+    renderEdgeLabels:          false,
+    allowInvalidContainer:     true,
+    defaultNodeType:           'circle',
+    minCameraRatio:            0.005,
+    maxCameraRatio:            20,
     nodeReducer,
     edgeReducer,
-    labelFont:          'IBM Plex Sans, system-ui, sans-serif',
-    labelSize:          10,
-    labelColor:         { color: 'rgba(148,163,184,0.65)' },
-    labelThreshold:     uiSettings.labelThreshold,
-    edgeLabelSize:      8,
-    stagePadding:       40,
-    backgroundColor:    '#09060F',
-    drawNodeHover:      customDrawNodeHover,
+    labelFont:                 'IBM Plex Sans, system-ui, sans-serif',
+    labelSize:                 10,
+    labelColor:                { color: 'rgba(148,163,184,0.65)' },
+    labelThreshold:            uiSettings.labelThreshold,
+    // LOI 3 — Labels seulement sur les nœuds assez grands
+    labelRenderedSizeThreshold: 6,
+    edgeLabelSize:             8,
+    stagePadding:              40,
+    backgroundColor:           '#09060F',
+    // LOI 6 — Z-order : hubs au-dessus, liens entre hubs au-dessus
+    zIndex:                    true,
+    drawNodeHover:             customDrawNodeHover,
   });
 
   // Canvas overlay (nœuds vitrés + triangles tags + masque arêtes internes)
