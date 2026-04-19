@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Synweft</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.4/dist/graphology.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sigma@2.4.0/build/sigma.min.js"></script>
+</head>
+<body>
+
+  <!-- ── Toolbar ── -->
+  <header class="toolbar">
+    <div class="logo">
+      <svg class="logo-icon" viewBox="0 0 20 20" fill="none">
+        <path d="M10 2L3 6v8l7 4 7-4V6L10 2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+        <circle cx="10" cy="10" r="2" fill="currentColor" opacity="0.6"/>
+        <line x1="10" y1="8" x2="10" y2="4" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+      </svg>
+      <span class="logo-text">Synweft</span>
+    </div>
+
+    <div class="search-wrap">
+      <svg class="search-icon" viewBox="0 0 16 16" fill="none">
+        <circle cx="6.5" cy="6.5" r="4" stroke="currentColor" stroke-width="1.2"/>
+        <line x1="10" y1="10" x2="14" y2="14" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+      <input id="search-input" class="search-input" type="text" placeholder="Rechercher une note…" autocomplete="off" />
+      <button id="search-clear" class="search-clear" title="Effacer">
+        <svg viewBox="0 0 12 12" fill="none"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+
+    <div class="toolbar-right">
+      <button id="btn-settings" class="btn btn-ghost" title="Paramètres">
+        <svg viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M12.6 3.4l-1.2 1.2M4.6 11.4l-1.2 1.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+        Paramètres
+      </button>
+      <button id="btn-save" class="btn btn-ghost">
+        <svg viewBox="0 0 16 16" fill="none"><path d="M3 2h8l3 3v9H2V2h1zm4 9a2 2 0 100-4 2 2 0 000 4zm3-9v3H5V2h5z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>
+        Snapshot
+      </button>
+      <div class="select-wrap">
+        <select id="snapshot-select" class="select">
+          <option value="">Snapshots…</option>
+        </select>
+      </div>
+      <button id="btn-load" class="btn btn-ghost">Charger</button>
+      <button id="btn-live" class="btn btn-warning" style="display:none">
+        <span class="dot-pulse"></span> Live
+      </button>
+      <span id="readonly-badge" class="badge" style="display:none">Lecture seule</span>
+    </div>
+  </header>
+
+  <!-- ── Barre de filtres ── -->
+  <div class="filter-bar">
+    <span class="filter-sep">Afficher</span>
+    <label class="chip">
+      <input type="checkbox" id="filter-ghosts" checked />
+      <span>Fantômes</span>
+    </label>
+    <label class="chip">
+      <input type="checkbox" id="filter-tags" checked />
+      <span>Tags</span>
+    </label>
+    <label class="chip">
+      <input type="checkbox" id="filter-directions" />
+      <span>Directions</span>
+    </label>
+    <div class="filter-degree">
+      <span class="filter-sep">Min. liens</span>
+      <input type="range" id="filter-degree-range" min="0" max="20" value="0" />
+      <span id="filter-degree-val" class="degree-val">0</span>
+    </div>
+  </div>
+
+  <!-- ── Layout principal ── -->
+  <main class="layout">
+    <div id="cy"></div>
+
+    <!-- ── Panneau paramètres (overlay flottant) ── -->
+    <div id="settings-panel" class="settings-panel hidden">
+      <div class="sp-header">
+        <span class="sp-title">Paramètres</span>
+        <button id="btn-sp-close" class="btn-icon" title="Fermer">
+          <svg viewBox="0 0 12 12" fill="none"><line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+
+      <div class="sp-body">
+
+        <!-- Affichage -->
+        <div class="sp-section">
+          <div class="sp-row">
+            <label class="sp-label">Seuil de fondu du texte</label>
+            <span id="val-label-thr" class="sp-val">5</span>
+          </div>
+          <input type="range" id="sp-label-thr" class="sp-range" min="0" max="15" step="0.5" value="5">
+
+          <div class="sp-row">
+            <label class="sp-label">Taille des nœuds</label>
+            <span id="val-node-scale" class="sp-val">1.0</span>
+          </div>
+          <input type="range" id="sp-node-scale" class="sp-range" min="0.3" max="3" step="0.1" value="1">
+
+          <div class="sp-row">
+            <label class="sp-label">Épaisseur des liens</label>
+            <span id="val-edge-scale" class="sp-val">1.0</span>
+          </div>
+          <input type="range" id="sp-edge-scale" class="sp-range" min="0.2" max="4" step="0.1" value="1">
+
+          <button id="btn-animate" class="sp-btn-animate">Animer</button>
+        </div>
+
+        <!-- Forces (collapsible) -->
+        <details class="sp-details" id="sp-forces-details">
+          <summary class="sp-summary">
+            <svg class="sp-chevron" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Forces
+          </summary>
+          <div class="sp-section">
+            <div class="sp-row">
+              <label class="sp-label">Force centrale</label>
+              <span id="val-gravity" class="sp-val">0.00</span>
+            </div>
+            <input type="range" id="sp-gravity" class="sp-range" min="0" max="0.3" step="0.01" value="0">
+
+            <div class="sp-row">
+              <label class="sp-label">Force de répulsion</label>
+              <span id="val-repulsion" class="sp-val">4000</span>
+            </div>
+            <input type="range" id="sp-repulsion" class="sp-range" min="500" max="20000" step="500" value="4000">
+
+            <div class="sp-row">
+              <label class="sp-label">Force de liaison</label>
+              <span id="val-attraction" class="sp-val">0.008</span>
+            </div>
+            <input type="range" id="sp-attraction" class="sp-range" min="0.001" max="0.05" step="0.001" value="0.008">
+
+            <div class="sp-row">
+              <label class="sp-label">Distance des liens</label>
+              <span id="val-min-dist" class="sp-val">60</span>
+            </div>
+            <input type="range" id="sp-min-dist" class="sp-range" min="5" max="150" step="5" value="60">
+          </div>
+        </details>
+
+        <!-- Notes fantômes (collapsible) -->
+        <details class="sp-details" id="sp-ghosts-details">
+          <summary class="sp-summary">
+            <svg class="sp-chevron" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Notes fantômes
+            <span id="ghost-count-badge" class="sp-badge">0</span>
+          </summary>
+          <div class="sp-section">
+            <div id="panel-stats" class="sp-stats">
+              <div class="stat"><span id="stat-nodes" class="stat-val">—</span><span class="stat-lbl">notes</span></div>
+              <div class="stat-divider"></div>
+              <div class="stat"><span id="stat-edges" class="stat-val">—</span><span class="stat-lbl">liens</span></div>
+              <div class="stat-divider"></div>
+              <div class="stat"><span id="stat-ghosts" class="stat-val">—</span><span class="stat-lbl">fantômes</span></div>
+            </div>
+            <ul id="ghost-list" class="ghost-list"></ul>
+          </div>
+        </details>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- ── Barre de statut ── -->
+  <footer class="status-bar">
+    <span id="info-nodes">0 nœuds</span>
+    <span class="sep">·</span>
+    <span id="info-edges">0 liens</span>
+    <span class="sep">·</span>
+    <span id="info-ghosts">0 fantômes</span>
+    <span class="sep">·</span>
+    <span id="info-tags">0 tags</span>
+    <svg id="legend" width="480" height="18" viewBox="0 0 480 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-left:12px;opacity:0.75;flex-shrink:0">
+      <circle cx="8" cy="14" r="6" fill="rgba(168,85,247,0.12)" stroke="rgba(168,85,247,0.55)" stroke-width="0.8"/>
+      <text x="20" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(168,85,247,0.80)">Note</text>
+      <circle cx="88" cy="14" r="6" fill="rgba(244,114,182,0.07)" stroke="rgba(244,114,182,0.45)" stroke-width="0.8"/>
+      <text x="100" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(244,114,182,0.70)">Fantôme</text>
+      <rect x="182" y="8" width="12" height="12" rx="1.5" fill="rgba(224,64,251,0.10)" stroke="rgba(224,64,251,0.55)" stroke-width="0.8" transform="rotate(45 188 14)"/>
+      <text x="200" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(224,64,251,0.70)">Tag</text>
+      <line x1="250" y1="14" x2="280" y2="14" stroke="rgba(168,85,247,0.50)" stroke-width="1.4"/>
+      <text x="286" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(122,107,144,0.80)">Lien note</text>
+      <line x1="360" y1="14" x2="390" y2="14" stroke="rgba(244,114,182,0.35)" stroke-width="0.8"/>
+      <text x="396" y="18" font-family="IBM Plex Mono" font-size="10" fill="rgba(122,107,144,0.80)">Lien fantôme</text>
+    </svg>
+    <span class="status-hint">Clic = focus · Scroll = zoom</span>
+    <span id="live-indicator" class="live-dot"></span>
+  </footer>
+
+  <!-- Tooltip flottant -->
+  <div id="node-tooltip" class="node-tooltip">
+    <span id="tooltip-name" class="tooltip-name"></span>
+    <span id="tooltip-meta" class="tooltip-meta"></span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
