@@ -64,17 +64,19 @@ const uiSettings = {
   nodeScale:      1.0,
   edgeScale:      1.0,
   gravity:        0,
-  repulsion:      4000,
+  repulsion:      5000,
   attraction:     0.008,
-  minDist:        15,
+  minDist:        60,
 };
 
 // ── État ──────────────────────────────────────
-let graph      = null;
-let renderer   = null;
-let isReadOnly = false;
-let animateId  = null;
-let animState  = null;
+let graph         = null;
+let renderer      = null;
+let isReadOnly    = false;
+let animateId     = null;
+let animState     = null;
+let overlayCanvas = null;
+let overlayCtx    = null;
 
 const state = {
   hoveredNode:  null,
@@ -98,37 +100,15 @@ function nodeReducer(node, data) {
   const res = { ...data, type: 'circle' };
   if (data._hidden) { res.hidden = true; return res; }
 
-  const isGhost    = data.ghost === true;
-  const isTag      = data.ntype === 'tag';
-  const isHovered  = node === state.hoveredNode;
-  const isSelected = node === state.selectedNode;
-  const deg        = data.degree || 0;
-
+  const isGhost  = data.ghost === true;
+  const isTag    = data.ntype === 'tag';
+  const deg      = data.degree || 0;
   const baseSize = isGhost ? 4 : isTag ? 5 : deg > 8 ? 9 : deg > 4 ? 6 : 5;
-  res.size       = baseSize * uiSettings.nodeScale;
 
-  if (isTag) {
-    res.color       = 'rgba(224,64,251,0.10)';
-    res.borderColor = '#E040FB';
-    res.borderSize  = 0.7;
-  } else if (isGhost) {
-    res.color       = 'rgba(244,114,182,0.07)';
-    res.borderColor = isHovered ? 'rgba(244,114,182,0.95)' : 'rgba(244,114,182,0.45)';
-    res.borderSize  = isHovered ? 1.2 : 0.7;
-  } else {
-    const fillOp   = deg > 8 ? 0.22 : deg > 4 ? 0.15 : 0.10;
-    const strokeOp = deg > 8 ? 1.0  : deg > 4 ? 0.70 : 0.45;
-    const strokeW  = deg > 8 ? 1.4  : deg > 4 ? 1.0  : 0.7;
-    res.color       = isHovered || isSelected ? 'rgba(168,85,247,0.35)' : `rgba(168,85,247,${fillOp})`;
-    res.borderColor = isHovered || isSelected ? '#A855F7' : `rgba(168,85,247,${strokeOp})`;
-    res.borderSize  = isHovered ? 1.5 : strokeW;
-  }
-
-  if (state.searchQuery && !node.toLowerCase().includes(state.searchQuery)) {
-    res.color       = 'rgba(168,85,247,0.04)';
-    res.borderColor = 'rgba(168,85,247,0.08)';
-    res.label       = '';
-  }
+  res.size  = baseSize * uiSettings.nodeScale;
+  // Couleur WebGL = fond opaque → masque l'arête à l'intérieur du nœud.
+  // L'apparence réelle (cercle vitré / triangle tag) est dessinée par drawNodeOverlay().
+  res.color = '#09060F';
 
   return res;
 }
@@ -160,38 +140,154 @@ function edgeReducer(edge, data) {
   return res;
 }
 
-// ── Rendu personnalisé (supprime le carré noir sigma) ──
+// ── Canvas overlay : nœuds vitrés + triangles tags ──────
+// Inséré entre le WebGL nodes et le canvas labels de sigma.
+// Le WebGL node (couleur = fond) masque l'arête ; l'overlay dessine l'apparence réelle.
+
+function setupNodeOverlay() {
+  const existing = document.getElementById('node-overlay');
+  if (existing) existing.remove();
+
+  overlayCanvas = document.createElement('canvas');
+  overlayCanvas.id = 'node-overlay';
+  overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+
+  // Insérer APRÈS le canvas WebGL "nodes" de sigma (et donc avant "labels")
+  const sigmaCanvases = renderer.getCanvases();
+  sigmaCanvases.nodes.after(overlayCanvas);
+
+  resizeOverlay();
+}
+
+function resizeOverlay() {
+  if (!overlayCanvas || !renderer) return;
+  const { width, height } = renderer.getDimensions();
+  const dpr = window.devicePixelRatio || 1;
+  // Match sigma's physical resolution (DPR-scaled buffer, CSS-sized display)
+  overlayCanvas.width  = Math.round(width  * dpr);
+  overlayCanvas.height = Math.round(height * dpr);
+  overlayCanvas.style.width  = width  + 'px';
+  overlayCanvas.style.height = height + 'px';
+  overlayCtx = overlayCanvas.getContext('2d');
+  // Apply DPR scale once : coordinates in CSS pixels → draws at physical resolution
+  overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawNodeOverlay() {
+  if (!overlayCtx || !renderer || !graph) return;
+  // clearRect in CSS pixel space (transform already applied once in resizeOverlay)
+  const { width, height } = renderer.getDimensions();
+  overlayCtx.clearRect(0, 0, width, height);
+
+  // Taille des nœuds : reproduit la formule WebGL sigma
+  // gl_PointSize = size * max(W,H) / normRatio / camRatio → rayon = gl_PointSize / 2
+  const normRatio = renderer.normalizationFunction.ratio;
+  const camRatio  = renderer.getCamera().ratio;
+  const sizeScale = Math.max(width, height) / normRatio / camRatio;
+
+  graph.forEachNode((node, attrs) => {
+    if (attrs._hidden) return;
+    const dd = renderer.getNodeDisplayData(node);
+    if (!dd || dd.hidden) return;
+
+    const vp       = renderer.graphToViewport({ x: attrs.x, y: attrs.y });
+    const deg      = attrs.degree || 0;
+    const isGhost  = attrs.ghost === true;
+    const isTag    = attrs.ntype === 'tag';
+    const baseSize = isGhost ? 4 : isTag ? 5 : deg > 8 ? 9 : deg > 4 ? 6 : 5;
+    const r        = baseSize * uiSettings.nodeScale * sizeScale;
+    if (r < 0.4) return;
+
+    const isHov = node === state.hoveredNode;
+    const isSel = node === state.selectedNode;
+
+    overlayCtx.save();
+    if (isTag) {
+      _drawTagNode(vp.x, vp.y, r, isHov);
+    } else {
+      _drawNoteNode(vp.x, vp.y, r, deg, isGhost, isHov, isSel);
+    }
+    overlayCtx.restore();
+  });
+}
+
+function _drawNoteNode(x, y, r, deg, isGhost, isHov, isSel) {
+  // 1. Fond opaque → couvre le segment d'arête à l'intérieur du cercle
+  overlayCtx.beginPath();
+  overlayCtx.arc(x, y, r, 0, Math.PI * 2);
+  overlayCtx.fillStyle = '#09060F';
+  overlayCtx.fill();
+
+  // 2. Remplissage vitré
+  let fill, stroke, sw;
+  if (isGhost) {
+    fill   = 'rgba(244,114,182,0.07)';
+    stroke = isHov ? 'rgba(244,114,182,0.95)' : 'rgba(244,114,182,0.45)';
+    sw     = isHov ? 1.5 : 0.8;
+  } else {
+    const fop = isHov || isSel ? 0.40 : deg > 8 ? 0.28 : deg > 4 ? 0.18 : 0.12;
+    const sop = isHov || isSel ? 1.0  : deg > 8 ? 1.0  : deg > 4 ? 0.80 : 0.55;
+    const ssw = isHov || isSel ? 2.0  : deg > 8 ? 1.6  : deg > 4 ? 1.2  : 0.9;
+    fill   = `rgba(168,85,247,${fop})`;
+    stroke = isHov || isSel ? '#A855F7' : `rgba(168,85,247,${sop})`;
+    sw     = ssw;
+  }
+
+  overlayCtx.beginPath();
+  overlayCtx.arc(x, y, r, 0, Math.PI * 2);
+  overlayCtx.fillStyle = fill;
+  overlayCtx.fill();
+  overlayCtx.strokeStyle = stroke;
+  overlayCtx.lineWidth   = sw;
+  overlayCtx.stroke();
+}
+
+function _drawTagNode(x, y, r, isHov) {
+  const h = r * 1.3; // légèrement plus grand pour équilibrer visuellement
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(x,            y - h);
+  overlayCtx.lineTo(x + h * 0.866, y + h * 0.5);
+  overlayCtx.lineTo(x - h * 0.866, y + h * 0.5);
+  overlayCtx.closePath();
+
+  // Fond opaque
+  overlayCtx.fillStyle = '#09060F';
+  overlayCtx.fill();
+  // Fill magenta vitré
+  overlayCtx.fillStyle = isHov ? 'rgba(224,64,251,0.22)' : 'rgba(224,64,251,0.10)';
+  overlayCtx.fill();
+  // Contour
+  overlayCtx.strokeStyle = isHov ? 'rgba(224,64,251,0.90)' : 'rgba(224,64,251,0.55)';
+  overlayCtx.lineWidth   = isHov ? 1.2 : 0.8;
+  overlayCtx.stroke();
+}
+
+// ── Rendu hover personnalisé (halo + label uniquement) ──
+// Le nœud lui-même est déjà redessiné avec l'état hover par drawNodeOverlay().
+// Ce callback (canvas "hovers" sigma, z-order au-dessus de l'overlay) ajoute le halo
+// extérieur et le label — sans aucun rectangle noir.
 function customDrawNodeHover(context, data, settings) {
   const isGhost = data.ghost === true;
-  const color   = isGhost ? '#F472B6' : '#A855F7';
   const size    = data.size;
   const x       = data.x;
   const y       = data.y;
 
   // Halo extérieur
   context.beginPath();
-  context.arc(x, y, size + 5, 0, Math.PI * 2);
-  context.fillStyle = isGhost ? 'rgba(244,114,182,0.12)' : 'rgba(168,85,247,0.15)';
+  context.arc(x, y, size + 6, 0, Math.PI * 2);
+  context.fillStyle = isGhost ? 'rgba(244,114,182,0.10)' : 'rgba(168,85,247,0.12)';
   context.fill();
 
-  // Contour vif
-  context.beginPath();
-  context.arc(x, y, size, 0, Math.PI * 2);
-  context.strokeStyle = color;
-  context.lineWidth = 1.5;
-  context.stroke();
-
-  // Label — fond semi-transparent, PAS de rectangle noir
+  // Label avec fond semi-transparent (pas de rectangle noir)
   if (data.label) {
-    const fs   = Math.max(settings.labelSize || 12, 12);
+    const fs = Math.max(settings.labelSize || 12, 12);
     context.font = `500 ${fs}px IBM Plex Sans, sans-serif`;
-    const tw   = context.measureText(data.label).width;
-    const lx   = x - tw / 2;
-    const ly   = y - size - 10;
+    const tw = context.measureText(data.label).width;
+    const ly = y - size - 10;
 
-    context.fillStyle = 'rgba(9,6,15,0.82)';
+    context.fillStyle = 'rgba(9,6,15,0.85)';
     context.beginPath();
-    context.roundRect(lx - 6, ly - fs, tw + 12, fs + 6, 3);
+    context.roundRect(x - tw / 2 - 6, ly - fs, tw + 12, fs + 6, 3);
     context.fill();
 
     context.fillStyle = '#EDE8F5';
@@ -257,6 +353,22 @@ function startAnimation() {
       if (spd > MAXV) { vx[i] = vx[i] / spd * MAXV; vy[i] = vy[i] / spd * MAXV; }
       xs[i] += vx[i]; ys[i] += vy[i];
     }
+    // Collision correction par frame (3 passes légères)
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const dx = xs[j] - xs[i], dy = ys[j] - ys[i];
+          const d2 = dx * dx + dy * dy;
+          if (d2 < MIND * MIND && d2 > 0.001) {
+            const d    = Math.sqrt(d2);
+            const push = (MIND - d) * 0.5 / d;
+            xs[i] -= dx * push; ys[i] -= dy * push;
+            xs[j] += dx * push; ys[j] += dy * push;
+          }
+        }
+      }
+    }
+
     for (let i = 0; i < n; i++) {
       graph.setNodeAttribute(nodes[i], 'x', xs[i]);
       graph.setNodeAttribute(nodes[i], 'y', ys[i]);
@@ -328,7 +440,7 @@ function initGraph(graphData) {
   // Layout initial : circulaire puis spring synchrone (stable avant init sigma)
   if (graph.order > 0) {
     circularLayout(graph);
-    springStep(300);
+    springStep(500);
   }
 
   // Rendu sigma.js (WebGL)
@@ -346,9 +458,14 @@ function initGraph(graphData) {
     labelThreshold:     uiSettings.labelThreshold,
     edgeLabelSize:      8,
     stagePadding:       40,
-    backgroundColor:    '#0F172A',
+    backgroundColor:    '#09060F',
     drawNodeHover:      customDrawNodeHover,
   });
+
+  // Canvas overlay (nœuds vitrés + triangles tags + masque arêtes internes)
+  setupNodeOverlay();
+  renderer.on('afterRender', drawNodeOverlay);
+  renderer.on('resize', () => { resizeOverlay(); drawNodeOverlay(); });
 
   bindSigmaEvents();
   applyFilters();
@@ -410,7 +527,8 @@ function fitCamera(animated = false) {
 function circularLayout(graph) {
   const nodes = graph.nodes();
   const n = nodes.length;
-  const radius = Math.max(100, n * 4);
+  // Larger initial radius → less overlap before spring runs
+  const radius = Math.max(150, n * 6);
   nodes.forEach((node, i) => {
     const angle = (2 * Math.PI * i) / n;
     graph.setNodeAttribute(node, 'x', radius * Math.cos(angle));
@@ -466,6 +584,23 @@ function springStep(iterations) {
       xs[i] += vx[i]; ys[i] += vy[i];
     }
   }
+  // ── Collision correction : 15 passes post-spring ──
+  // Garantit qu'aucun nœud ne se superpose à un autre (min sep = MIN_DIST)
+  for (let pass = 0; pass < 15; pass++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = xs[j] - xs[i], dy = ys[j] - ys[i];
+        const d2 = dx * dx + dy * dy;
+        if (d2 < MIN_DIST * MIN_DIST && d2 > 0.001) {
+          const d    = Math.sqrt(d2);
+          const push = (MIN_DIST - d) * 0.5 / d;
+          xs[i] -= dx * push; ys[i] -= dy * push;
+          xs[j] += dx * push; ys[j] += dy * push;
+        }
+      }
+    }
+  }
+
   // Écrire les positions finales dans le graphe
   nodes.forEach((nd, i) => {
     graph.setNodeAttribute(nd, 'x', xs[i]);
